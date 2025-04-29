@@ -4,10 +4,15 @@ import time
 # Initialize pygame mixer
 pygame.mixer.init()
 
-# Load and play the audio file
-pygame.mixer.music.load('clips/merged/vocals.wav')
-pygame.mixer.music.play()
+# Load the audio files
+vocals = pygame.mixer.Sound("clips/numbered_split/1.vocals.wav")
+music = pygame.mixer.Sound("clips/numbered_split/1.music.wav")
 
-# Keep the script running while the music plays
-while pygame.mixer.music.get_busy():
-    time.sleep(1) 
+# Play both tracks simultaneously
+vocals.play()
+music.play()
+
+# Keep the program running while the audio plays
+# Get the length of the longer track
+duration = max(vocals.get_length(), music.get_length())
+time.sleep(duration)
