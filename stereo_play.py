@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from typing import List, Dict
 
 CHANNELS = 4
+FILES = [
+    'all.1.wav',
+    'all.2.wav',
+    'all.3.wav',
+    'all.4.wav'
+]
+
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -16,7 +23,7 @@ class AudioFile:
 class AudioPlayer:
     def __init__(self, files: List[tuple[str, str]]):
         self.files = []
-        self.file_to_play_by_channel = [2, 2, 2, 2]
+        self.file_to_play_by_channel = [len(FILES), len(FILES), len(FILES), len(FILES)]
         max_channels = 0
         for filepath in files:
             data, samplerate = sf.read(filepath)
@@ -89,16 +96,9 @@ def list_audio_devices():
     print(sd.query_devices())
     
 def main():
-    # List available devices first
     list_audio_devices()
     
-    # Define files to play with their toggle keys
-    files = [
-        'all.1.wav',
-        'all.2.wav'
-    ]
-    
-    player = AudioPlayer(files)
+    player = AudioPlayer(FILES)
     
     def on_press(key):
         try:
@@ -112,7 +112,8 @@ def main():
             channel -= 1
 
             # Add a dummy extra file for silence.
-            player.file_to_play_by_channel[channel] = ((player.file_to_play_by_channel[channel] + 1) % 3)
+            player.file_to_play_by_channel[channel] = ((player.file_to_play_by_channel[channel] + 1) 
+                                                       % (1 + len(player.files)))
             print(f"files_to_play_by_channel {player.file_to_play_by_channel}")
         except AttributeError:
             return
