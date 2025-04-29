@@ -6,6 +6,7 @@ from pynput import keyboard
 from dataclasses import dataclass
 from typing import List, Dict
 
+CHANNELS = 4
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -15,7 +16,7 @@ class AudioFile:
 class AudioPlayer:
     def __init__(self, files: List[tuple[str, str]]):
         self.files = []
-        self.file_to_play_by_channel = [0, 0]
+        self.file_to_play_by_channel = [2, 2, 2, 2]
         max_channels = 0
         for filepath in files:
             data, samplerate = sf.read(filepath)
@@ -34,53 +35,47 @@ class AudioPlayer:
         self.channels = min(max_channels, self.max_output_channels)
         print(f"Using {self.channels} output channels")
 
-    def callback(self, outdata, frames, time_info, status):
-        if status:
-            print(status)
+    def _handle_channel_mismatch(self, chunk: np.ndarray) -> np.ndarray:
+        if chunk.shape[1] > self.channels:
+            # print(f"Chunk has {chunk.shape[1]} channels, downmixing to {self.channels}")
+            left = np.mean(chunk[:, :2], axis=1, keepdims=True)
+            right = np.mean(chunk[:, 2:], axis=1, keepdims=True)
+            chunk = np.hstack((left, right))
+        elif chunk.shape[1] < self.channels:
+            chunk = np.pad(chunk, ((0, 0), (0, self.channels - chunk.shape[1])))
+        return chunk
 
-        # Get chunks from all files
+    def _select_channels(self, chunk: np.ndarray, file_index: int) -> np.ndarray:
+        # Make a copy of the chunk to avoid mutating the original data
+        selected = np.zeros_like(chunk)
+        for channel in range(CHANNELS):
+            if self.file_to_play_by_channel[channel] == file_index:
+                selected[:, channel] = chunk[:, channel]
+        return selected
+
+    def callback(self, outdata, frames, time_info, status):
         chunks = []
         for file_index, file in enumerate(self.files):
-            # Calculate remaining frames in current file
             remaining_frames = len(file.data) - file.current_frame
             
             if remaining_frames < frames:
-                # Get remaining frames from current position
-                chunk = file.data[file.current_frame:]
-                # Get remaining frames from start of file
-                remaining = file.data[:frames - remaining_frames]
-                # Combine them
-                chunk = np.vstack((chunk, remaining))
-                file.current_frame = frames - remaining_frames
-            else:
-                chunk = file.data[file.current_frame:file.current_frame + frames]
-                file.current_frame += frames
+                file.current_frame = 0
+
+            chunk = file.data[file.current_frame:file.current_frame + frames]
+            file.current_frame += frames
             
-            # Handle channel count mismatch
-            if chunk.shape[1] > self.channels:
-                # Downmix to available channels
-                if self.channels == 2:
-                    # Simple stereo downmix: average channels 1-2 and 3-4
-                    left = np.mean(chunk[:, :2], axis=1, keepdims=True)
-                    right = np.mean(chunk[:, 2:], axis=1, keepdims=True)
-                    chunk = np.hstack((left, right))
-                else:
-                    # For other channel counts, just take first N channels
-                    chunk = chunk[:, :self.channels]
-            elif chunk.shape[1] < self.channels:
-                # Pad with zeros if needed
-                chunk = np.pad(chunk, ((0, 0), (0, self.channels - chunk.shape[1])))
-            
-            for channel in range(2):
-                if self.file_to_play_by_channel[channel] != file_index:
-                    chunk[:, channel] = 0.0
-                if self.file_to_play_by_channel[channel] != file_index:
-                    chunk[:, channel] = 0.0
+            chunk = self._select_channels(chunk, file_index)
             chunks.append(chunk)
 
-        # Mix all chunks
+        # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
-        # Normalize to prevent clipping
+        
+        # Then downmix to stereo if needed
+        if mixed.shape[1] > 2:
+            left = np.mean(mixed[:, :2], axis=1, keepdims=True)
+            right = np.mean(mixed[:, 2:], axis=1, keepdims=True)
+            mixed = np.hstack((left, right))
+        
         if np.max(np.abs(mixed)) > 1.0:
             mixed = mixed / np.max(np.abs(mixed))
 
@@ -100,7 +95,7 @@ def main():
     # Define files to play with their toggle keys
     files = [
         'all.1.wav',
-        'all.2.wav'git
+        'all.2.wav'
     ]
     
     player = AudioPlayer(files)
@@ -110,9 +105,14 @@ def main():
             if not key.char.isdigit():
                 return
             channel = int(key.char)
-            if channel >= len(player.files):
+            if channel == 0 or channel >= CHANNELS+1:
                 return
-            player.file_to_play_by_channel[channel] = (player.file_to_play_by_channel[channel] + 1) % 2
+            
+            # 0-index
+            channel -= 1
+
+            # Add a dummy extra file for silence.
+            player.file_to_play_by_channel[channel] = ((player.file_to_play_by_channel[channel] + 1) % 3)
             print(f"files_to_play_by_channel {player.file_to_play_by_channel}")
         except AttributeError:
             return
