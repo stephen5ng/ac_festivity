@@ -23,10 +23,19 @@ class AudioFile:
     samplerate: int
     current_frame: int = 0
 
+# Generate random play orders for each channel
+channel_play_orders = [
+    np.random.permutation(len(FILES)+1).tolist() for _ in range(CHANNELS)
+]
+print(f"channel_play_orders {channel_play_orders}")
 class AudioPlayer:
     def __init__(self, files: List[tuple[str, str]]):
         self.files = []
-        self.file_to_play_by_channel = [len(FILES), len(FILES), len(FILES), len(FILES)]
+        # Initialize indices to play file 4 for each channel by finding its position in each sequence
+        self.index_to_play_by_channel = [
+            channel_play_orders[channel].index(4) if 4 in channel_play_orders[channel] else 0
+            for channel in range(CHANNELS)
+        ]
         max_channels = 0
         for filepath in files:
             data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
@@ -59,7 +68,8 @@ class AudioPlayer:
         # Make a copy of the chunk to avoid mutating the original data
         selected = np.zeros_like(chunk)
         for channel in range(CHANNELS):
-            if self.file_to_play_by_channel[channel] == file_index:
+            # print(f"channel {channel} index_to_play_by_channel {self.index_to_play_by_channel[channel]}")
+            if channel_play_orders[channel][self.index_to_play_by_channel[channel]] == file_index:
                 selected[:, channel] = chunk[:, channel]
         return selected
 
@@ -102,7 +112,6 @@ def main():
     list_audio_devices()
     
     player = AudioPlayer(FILES)
-    
     def on_press(key):
         try:
             if not key.char.isdigit():
@@ -115,9 +124,10 @@ def main():
             channel -= 1
 
             # Add a dummy extra file for silence.
-            player.file_to_play_by_channel[channel] = ((player.file_to_play_by_channel[channel] + 1) 
+            player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
                                                        % (1 + len(player.files)))
-            print(f"files_to_play_by_channel {player.file_to_play_by_channel}")
+            print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
+            print(f"file_to_play_by_channel {[channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(4)]}")
         except AttributeError:
             return
 
