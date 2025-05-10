@@ -81,7 +81,7 @@ class AudioPlayer:
         mixed = np.sum(chunks, axis=0)
         
         # Then downmix to stereo if needed
-        if mixed.shape[1] > 2:
+        if outdata.shape[1] == 2:
             left = np.mean(mixed[:, :2], axis=1, keepdims=True)
             right = np.mean(mixed[:, 2:], axis=1, keepdims=True)
             mixed = np.hstack((left, right))
