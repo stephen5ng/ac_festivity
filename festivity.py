@@ -11,10 +11,10 @@ from typing import List, Dict
 MUSIC_DIR = 'music'
 CHANNELS = 4
 FILES = [
+    '0.wav',
     '1.wav',
     '2.wav',
-    '3.wav',
-    '4.wav'
+    '3.wav'
 ]
 CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
 @dataclass
@@ -37,6 +37,8 @@ class AudioPlayer:
             channel_play_orders[channel].index(4) if 4 in channel_play_orders[channel] else 0
             for channel in range(CHANNELS)
         ]
+        print(f"index_to_play_by_channel {self.index_to_play_by_channel}")
+        self.control_channel = 0
         max_channels = 0
         for filepath in files:
             data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
@@ -133,6 +135,12 @@ class AudioPlayer:
         return chunks
 
     def callback(self, outdata, frames, time_info, status):
+        # Print counter every second
+        control_channel = int(time_info.outputBufferDacTime) % 4
+        if control_channel != self.control_channel:
+            self.control_channel = control_channel
+            print(f"control_channel: {control_channel}")
+
         chunks = self._process_chunks(frames)
 
         # Mix all chunks to get 4-channel sound
@@ -162,20 +170,21 @@ def main():
     player = AudioPlayer(FILES)
     def on_press(key):
         try:
-            if not key.char.isdigit():
-                return
-            channel = int(key.char)
-            if channel == 0 or channel >= CHANNELS+1:
-                return
+            channel = None
+            if key == keyboard.Key.space:
+                channel = player.control_channel
+            elif hasattr(key, 'char') and key.char.isdigit():
+                channel = int(key.char) - 1
+                if channel < 0 or channel >= CHANNELS:
+                    return
             
-            # 0-index
-            channel -= 1
-
-            # Add a dummy extra file for silence.
-            player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
-                                                       % (1 + len(player.files)))
-            print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
-            print(f"file_to_play_by_channel {[channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(4)]}")
+            print(f"channel: {channel}")
+            if channel is not None:
+                # Add a dummy extra file for silence.
+                player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
+                                                           % (1 + len(player.files)))
+                print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
+                print(f"file_to_play_by_channel {[channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(4)]}")
         except AttributeError:
             return
 
