@@ -21,6 +21,18 @@ import numpy as np
 from pynput import keyboard
 from dataclasses import dataclass
 from typing import List, Dict
+from enum import Enum, auto
+
+class PlayerState(Enum):
+    IDLE = auto()
+    PLAYING_CHANNEL_ANNOUNCEMENT = auto()
+    PLAY_MATCH_ANNOUNCEMENT = auto()
+    PLAYING_MATCH_ANNOUNCEMENT = auto()
+    PLAY_VICTORY_ANNOUNCEMENT = auto()
+    PLAYING_VICTORY_ANNOUNCEMENT = auto()
+    PLAY_VICTORY_FILE = auto()
+    PLAYING_VICTORY_FILE = auto()
+    PLAYED_VICTORY_FILE = auto()
 
 MUSIC_DIR = 'music'
 VOICE_DIR = 'voices'
@@ -42,8 +54,8 @@ CHANNEL_MATCH_FILES = [
     '1_matches.wav',
     '2_matches.wav',
     '3_matches.wav',
-    '4_matches.wav'
 ]
+VICTORY_SOUND_FILE = 'win.wav'
 FILE_COUNT = len(FILES)
 CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
 @dataclass
@@ -70,7 +82,9 @@ class AudioPlayer:
         self.control_channel = 0
         self.duplicate_count = None
         self.winning_file = None  # Track which file has won but not finished playing
-        self.done_playing = False  # Track if current announcement is done playing
+        self.done_playing_announcement = False  # Track if current announcement is done playing
+        self.state = PlayerState.IDLE
+        self.playing_victory_announcement = False
         
         # Load game files
         for filepath in files:
@@ -96,6 +110,12 @@ class AudioPlayer:
             if samplerate != self.files[0].samplerate:
                 raise ValueError(f"{filepath} must have same sample rate as game files")
             self.channel_match_files.append(AudioFile(data=data, samplerate=samplerate))
+
+        # Load victory sound
+        victory_data, victory_samplerate = sf.read(os.path.join(VOICE_DIR, VICTORY_SOUND_FILE))
+        if victory_samplerate != self.files[0].samplerate:
+            raise ValueError(f"{VICTORY_SOUND_FILE} must have same sample rate as game files")
+        self.victory_file = AudioFile(data=victory_data, samplerate=victory_samplerate)
 
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
@@ -165,49 +185,71 @@ class AudioPlayer:
         """Process audio chunks for all files, handling looping and channel selection.
         Returns a list of processed audio chunks."""
         chunks = []
+        looped = False
         for file_index, file in enumerate(self.files):
             remaining_frames = len(file.data) - file.current_frame
             
             if remaining_frames < frames:
                 file.current_frame = 0
+                looped = True
 
             chunk = file.data[file.current_frame:file.current_frame + frames]
             file.current_frame += frames
             
             chunk = self._select_channels(chunk, file_index)
             chunks.append(chunk)
-        return chunks
+        return chunks, looped
+
+    def _next_announcement_state(self, state: PlayerState):
+        if state != PlayerState.IDLE:
+            print(f"current state: {state}")
+        if state == PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT:
+            return PlayerState.IDLE
+        elif state == PlayerState.PLAYING_MATCH_ANNOUNCEMENT:
+            return PlayerState.IDLE
+        elif state == PlayerState.PLAYING_VICTORY_ANNOUNCEMENT:
+            return PlayerState.PLAY_VICTORY_FILE
+        elif state == PlayerState.PLAYING_VICTORY_FILE:
+            return PlayerState.PLAYED_VICTORY_FILE
+        elif state == PlayerState.PLAYED_VICTORY_FILE:
+            return PlayerState.IDLE
+        return PlayerState.IDLE
+        # print(f"current state: {state}")
 
     def callback(self, outdata, frames, time_info, status):
         control_channel = int(time_info.outputBufferDacTime) % CHANNELS
-        if self.duplicate_count is not None:
+        if self.state == PlayerState.IDLE:
+            if control_channel != self.control_channel:
+                self.control_channel = control_channel
+                self.channel_announce_file = self.channel_announce_files[control_channel]
+                self.channel_announce_file.current_frame = 0
+                self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
+                print(f"control_channel: {control_channel}")            
+        elif self.state == PlayerState.PLAY_MATCH_ANNOUNCEMENT:
             self.channel_announce_file = self.channel_match_files[self.duplicate_count]
+            self.state = PlayerState.PLAYING_MATCH_ANNOUNCEMENT
             self.channel_announce_file.current_frame = 0
-            self.duplicate_count = None
-            self.done_playing = False
-
-        elif self.done_playing and control_channel != self.control_channel:
-            self.control_channel = control_channel
-            self.channel_announce_file = self.channel_announce_files[control_channel]
+            print(f"PLAY_MATCH_ANNOUNCEMENT")
+        elif self.state == PlayerState.PLAY_VICTORY_ANNOUNCEMENT:
+            self.channel_announce_file = self.victory_file
             self.channel_announce_file.current_frame = 0
-            self.done_playing = False
-            print(f"control_channel: {control_channel}")
+            self.state = PlayerState.PLAYING_VICTORY_ANNOUNCEMENT
+            print(f"PLAY_VICTORY_ANNOUNCEMENT")
+        elif self.state == PlayerState.PLAY_VICTORY_FILE:
+            print(f"PLAY_VICTORY_FILE")
+            self.state = PlayerState.PLAYING_VICTORY_FILE            
+            for f in self.files:
+                f.current_frame = 0
+        elif self.state == PlayerState.PLAYED_VICTORY_FILE:
+            self._handle_win(self.winning_file)
 
-        # Check if winning file has finished playing
-        if self.winning_file:
-            winning_file_index = self.winning_file
-            file = self.files[winning_file_index]
-            if file.current_frame + frames >= len(file.data):
-                self._handle_win(self.winning_file)
-                self.winning_file = None
-
-        chunks = self._process_chunks(frames)
+        chunks, looped = self._process_chunks(frames)
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
         # Mix channels if there's a winning file
-        if self.winning_file:
+        if self.state == PlayerState.PLAY_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
             mixed = self._mix_to_all_channels(mixed)
         else:
             # Adjust volumes if there's no winning file
@@ -218,30 +260,38 @@ class AudioPlayer:
         padded[:, :mixed.shape[1]] = mixed
         mixed = padded
 
-        # If mixed, copy the first channel to all output channels
-        if self.winning_file:
-            mixed = np.tile(mixed[:, :1], (1, outdata.shape[1]))
+        channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
+            self.channel_announce_file.current_frame + frames]
+        if len(channel_announce_chunk) < frames:
+            channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
+
+        self.channel_announce_file.current_frame += frames
+
+        # Finished playing announcement file, next state
+        if self.state == PlayerState.PLAY_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
+            if looped:
+                self.state = self._next_announcement_state(self.state)
+        elif self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
+            self.state = self._next_announcement_state(self.state)
+            # print(f"next state: {self.state}")
+
+        if self.state == PlayerState.PLAYING_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
+            mixed = self._mix_to_all_channels(mixed)
         else:
-            # Mix channel_announce_chunk into channels 5 and 6
-            channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
-                self.channel_announce_file.current_frame + frames]
-            self.channel_announce_file.current_frame += frames
-
-            # Check if we've reached the end of the file
-            if self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
-                self.done_playing = True
-
-            # Ensure channel_announce_chunk is the right length
-            if len(channel_announce_chunk) < frames:
-                channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
             mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
             mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
+
+        # Copy announcement to first four channels during victory states
+        if self.state in [PlayerState.PLAYING_VICTORY_ANNOUNCEMENT]:
+            for i in range(4):  # copy to first 4 channels
+                mixed[:, i] = channel_announce_chunk
 
         mixed = self._normalize_volume(mixed)
         outdata[:] = mixed
 
     def _handle_win(self, winning_file: int) -> None:
         """Remove the winning file from all play orders and reset channels to silent track."""
+        # return
         for i in range(len(channel_play_orders)):
             channel_play_orders[i] = [x for x in channel_play_orders[i] if x != winning_file]
             # Reset to silent track
@@ -277,15 +327,20 @@ def main():
                 channel = player.control_channel
             elif key == keyboard.Key.enter:
                 # Check for win when return key is pressed
+                print("checking for win")
                 files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
                 files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
-                player.duplicate_count = max_duplicate_count(files_to_play_by_channel)
-                if player.duplicate_count == FILE_COUNT:
-                    print("winner: restarting")
-                    for file in player.files:
-                        file.current_frame = 0
-                    player.winning_file = files_to_play_by_channel[0]  # Mark this file as winning
-                    return
+                max_dupe_count = max_duplicate_count(files_to_play_by_channel)
+
+                if max_dupe_count == FILE_COUNT:
+                    print("found win")
+                    player.state = PlayerState.PLAY_VICTORY_ANNOUNCEMENT
+                    player.winning_file = files_to_play_by_channel[0]                  
+                else:
+                    print("no win")
+                    player.duplicate_count = max_duplicate_count(files_to_play_by_channel)
+                    player.state = PlayerState.PLAY_MATCH_ANNOUNCEMENT
+
             elif hasattr(key, 'char'):
                 print(f"key.char: {key.char}")
                 if key.char == 's':
