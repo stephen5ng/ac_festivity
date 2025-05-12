@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 
+"""A multi-channel audio player that allows synchronized playback of multiple audio files.
+
+This program creates a 4-channel audio system where each channel can independently play
+different audio files. Players can control their assigned channel using number keys (1-4)
+or the space bar (which rotates through channels automatically). When all channels
+synchronize on the same file, that file is considered a "winner" and is removed from
+future play options after it finishes playing.
+
+Usage:
+    Run the script and use number keys 1-4 to control each channel, or space bar to
+    control the currently active channel. Press 's' to restart all files from the beginning.
+"""
+
 import sounddevice as sd
 import soundfile as sf
 import os
@@ -16,6 +29,7 @@ FILES = [
     '2.wav',
     '3.wav'
 ]
+FILE_COUNT = len(FILES)
 CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
 @dataclass
 class AudioFile:
@@ -34,11 +48,12 @@ class AudioPlayer:
         self.files = []
         # Initialize indices to play file 4 for each channel by finding its position in each sequence
         self.index_to_play_by_channel = [
-            channel_play_orders[channel].index(4) if 4 in channel_play_orders[channel] else 0
+            channel_play_orders[channel].index(FILE_COUNT)
             for channel in range(CHANNELS)
         ]
         print(f"index_to_play_by_channel {self.index_to_play_by_channel}")
         self.control_channel = 0
+        self.winning_file = None  # Track which file has won but not finished playing
         for filepath in files:
             data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
             if data.shape[1] != CHANNELS:
@@ -91,7 +106,7 @@ class AudioPlayer:
         Returns a tuple of (mixed audio array, whether files were mixed)."""
         current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] 
                         for channel in range(CHANNELS)]
-        if len(set(current_files)) == 1 and current_files[0] != 4:  # Don't mix if all channels are silent (file 4)
+        if len(set(current_files)) == 1 and current_files[0] != FILE_COUNT:  # Don't mix if all channels are silent
             # Mix all channels together
             channel_mix = np.mean(mixed[:, :CHANNELS], axis=1, keepdims=True)
             # Apply the mix to all available output channels
@@ -138,6 +153,14 @@ class AudioPlayer:
             self.control_channel = control_channel
             print(f"control_channel: {control_channel}")
 
+        # Check if winning file has finished playing
+        if self.winning_file is not None:
+            winning_file_index = self.winning_file
+            file = self.files[winning_file_index]
+            if file.current_frame + frames >= len(file.data):
+                self._handle_win(self.winning_file)
+                self.winning_file = None
+
         chunks = self._process_chunks(frames)
 
         # Mix all chunks to get 4-channel sound
@@ -162,6 +185,19 @@ class AudioPlayer:
 
         mixed = self._normalize_volume(mixed)
         outdata[:] = mixed
+
+    def _handle_win(self, winning_file: int) -> None:
+        """Remove the winning file from all play orders and reset channels to silent track."""
+        for i in range(len(channel_play_orders)):
+            channel_play_orders[i] = [x for x in channel_play_orders[i] if x != winning_file]
+            # Reset to silent track
+            self.index_to_play_by_channel = [
+                channel_play_orders[channel].index(FILE_COUNT) for channel in range(CHANNELS)
+            ]
+        print(f"Removed file {winning_file} from play orders")
+        print(f"channel_play_orders: {channel_play_orders}")
+        print(f"Updated channel_play_orders: {channel_play_orders}")
+        print(f"Updated index_to_play_by_channel: {self.index_to_play_by_channel}")
 
 def list_audio_devices():
     print("\nAvailable audio devices:")
@@ -188,14 +224,16 @@ def main():
                         return
             
             if channel is not None:
+                print(f"channel_play_orders {channel_play_orders}")
                 # Add a dummy extra file for silence.
                 player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
-                                                           % (1 + len(player.files)))
-                files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(4)]
-                if len(set(files_to_play_by_channel)) == 1:
+                                                           % len(channel_play_orders[channel]))
+                files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
+                if len(set(files_to_play_by_channel)) == 1 and files_to_play_by_channel[0] != FILE_COUNT:
                     print("winner: restarting")
                     for file in player.files:
                         file.current_frame = 0
+                    player.winning_file = files_to_play_by_channel[0]  # Mark this file as winning
                 print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
                 print(f"files_to_play_by_channel {files_to_play_by_channel}")
         except AttributeError:
