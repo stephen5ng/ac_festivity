@@ -163,9 +163,6 @@ class AudioPlayer:
         mixed = self._normalize_volume(mixed)
         outdata[:] = mixed
 
-    def is_playing(self) -> bool:
-        return any(file.current_frame < len(file.data) for file in self.files)
-
 def list_audio_devices():
     print("\nAvailable audio devices:")
     print(sd.query_devices())
@@ -216,7 +213,7 @@ def main():
         callback=player.callback
     ):
         print("\nPlaying audio...")
-        while player.is_playing():
+        while True:
             sd.sleep(100)
 
     print("Done!")
