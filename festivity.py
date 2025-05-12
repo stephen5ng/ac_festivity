@@ -86,18 +86,18 @@ class AudioPlayer:
             mixed[:, channel] *= volume_linear
         return mixed
 
-    def _mix_if_same_file(self, mixed: np.ndarray) -> np.ndarray:
+    def _mix_if_same_file(self, mixed: np.ndarray) -> tuple[np.ndarray, bool]:
         """If all channels are playing the same file, mix them together.
-        Returns the mixed audio array."""
+        Returns a tuple of (mixed audio array, whether files were mixed)."""
         current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] 
                         for channel in range(CHANNELS)]
         if len(set(current_files)) == 1:
-            self.matched_files.append(current_files[0])
             # Mix all channels together
             channel_mix = np.mean(mixed, axis=1, keepdims=True)
             # Apply the mix to all channels
             mixed = np.tile(channel_mix, (1, mixed.shape[1]))
-        return mixed
+            return mixed, True
+        return mixed, False
 
     def _downmix_to_stereo_if_needed(self, mixed: np.ndarray, output_channels: int) -> np.ndarray:
         """Downmix to stereo if the output device only supports 2 channels.
@@ -133,14 +133,17 @@ class AudioPlayer:
         return chunks
 
     def callback(self, outdata, frames, time_info, status):
-        # Process all chunks
         chunks = self._process_chunks(frames)
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
-        mixed = self._adjust_channel_volumes(mixed)
-        mixed = self._mix_if_same_file(mixed)
+        mixed, is_mixed = self._mix_if_same_file(mixed)
+        
+        # Only adjust volumes if we're not mixing (i.e., different files on different channels)
+        if not is_mixed:
+            mixed = self._adjust_channel_volumes(mixed)
+            
         mixed = self._downmix_to_stereo_if_needed(mixed, outdata.shape[1])
         mixed = self._normalize_volume(mixed)
 
