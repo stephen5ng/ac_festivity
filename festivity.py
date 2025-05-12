@@ -173,12 +173,18 @@ def main():
             channel = None
             if key == keyboard.Key.space:
                 channel = player.control_channel
-            elif hasattr(key, 'char') and key.char.isdigit():
-                channel = int(key.char) - 1
-                if channel < 0 or channel >= CHANNELS:
+            elif hasattr(key, 'char'):
+                if key.char == 's':
+                    # Restart all files from beginning
+                    for file in player.files:
+                        file.current_frame = 0
+                    print("Restarted all files from beginning")
                     return
+                elif key.char.isdigit():
+                    channel = int(key.char) - 1
+                    if channel < 0 or channel >= CHANNELS:
+                        return
             
-            print(f"channel: {channel}")
             if channel is not None:
                 # Add a dummy extra file for silence.
                 player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
