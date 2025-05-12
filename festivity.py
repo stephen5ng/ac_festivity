@@ -13,6 +13,7 @@ Usage:
     control the currently active channel. Press 's' to restart all files from the beginning.
 """
 
+from collections import Counter
 import sounddevice as sd
 import soundfile as sf
 import os
@@ -35,6 +36,13 @@ CHANNEL_ANNOUNCE_FILES = [
     'two.wav',
     'three.wav',
     'four.wav'
+]
+CHANNEL_MATCH_FILES = [
+    '0_matches.wav',
+    '1_matches.wav',
+    '2_matches.wav',
+    '3_matches.wav',
+    '4_matches.wav'
 ]
 FILE_COUNT = len(FILES)
 CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
@@ -60,7 +68,9 @@ class AudioPlayer:
         ]
         print(f"index_to_play_by_channel {self.index_to_play_by_channel}")
         self.control_channel = 0
+        self.duplicate_count = None
         self.winning_file = None  # Track which file has won but not finished playing
+        self.done_playing = False  # Track if current announcement is done playing
         
         # Load game files
         for filepath in files:
@@ -78,6 +88,14 @@ class AudioPlayer:
                 raise ValueError(f"{filepath} must have same sample rate as game files")
             self.channel_announce_files.append(AudioFile(data=data, samplerate=samplerate))
         self.channel_announce_file = self.channel_announce_files[0]  # Start with "one.wav"
+
+        # Load channel match files
+        self.channel_match_files = []
+        for filepath in CHANNEL_MATCH_FILES:
+            data, samplerate = sf.read(os.path.join(VOICE_DIR, filepath))
+            if samplerate != self.files[0].samplerate:
+                raise ValueError(f"{filepath} must have same sample rate as game files")
+            self.channel_match_files.append(AudioFile(data=data, samplerate=samplerate))
 
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
@@ -162,10 +180,17 @@ class AudioPlayer:
 
     def callback(self, outdata, frames, time_info, status):
         control_channel = int(time_info.outputBufferDacTime) % CHANNELS
-        if control_channel != self.control_channel:
+        if self.duplicate_count is not None:
+            self.channel_announce_file = self.channel_match_files[self.duplicate_count]
+            self.channel_announce_file.current_frame = 0
+            self.duplicate_count = None
+            self.done_playing = False
+
+        elif self.done_playing and control_channel != self.control_channel:
             self.control_channel = control_channel
             self.channel_announce_file = self.channel_announce_files[control_channel]
             self.channel_announce_file.current_frame = 0
+            self.done_playing = False
             print(f"control_channel: {control_channel}")
 
         # Check if winning file has finished playing
@@ -187,30 +212,30 @@ class AudioPlayer:
         else:
             # Adjust volumes if there's no winning file
             mixed = self._adjust_channel_volumes(mixed)
-            
-        # Add channel announcement to the mix
-        channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
-            self.channel_announce_file.current_frame + frames]
-        self.channel_announce_file.current_frame += frames
-        # print(f"mixed.shape: {mixed.shape}")
 
         # Pad to 6 channels
         padded = np.zeros((mixed.shape[0], 6))
         padded[:, :mixed.shape[1]] = mixed
         mixed = padded
 
-        # Mix one.wav into channels 5 and 6
-        # Ensure foo_chunk is the right length
-        if len(channel_announce_chunk) < frames:
-            channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
-        elif len(channel_announce_chunk) > frames:
-            channel_announce_chunk = channel_announce_chunk[:frames]
-        mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
-        mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
-
         # If mixed, copy the first channel to all output channels
         if self.winning_file:
             mixed = np.tile(mixed[:, :1], (1, outdata.shape[1]))
+        else:
+            # Mix channel_announce_chunk into channels 5 and 6
+            channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
+                self.channel_announce_file.current_frame + frames]
+            self.channel_announce_file.current_frame += frames
+
+            # Check if we've reached the end of the file
+            if self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
+                self.done_playing = True
+
+            # Ensure channel_announce_chunk is the right length
+            if len(channel_announce_chunk) < frames:
+                channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
+            mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
+            mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
 
         mixed = self._normalize_volume(mixed)
         outdata[:] = mixed
@@ -231,6 +256,11 @@ class AudioPlayer:
 def list_audio_devices():
     print("\nAvailable audio devices:")
     print(sd.query_devices())
+
+def max_duplicate_count(nums):
+    counts = Counter(nums)
+    duplicate_counts = [count for count in counts.values() if count > 1]
+    return max(duplicate_counts) if duplicate_counts else 0
     
 def main():
     list_audio_devices()
@@ -246,10 +276,11 @@ def main():
             if key == keyboard.Key.space:
                 channel = player.control_channel
             elif key == keyboard.Key.enter:
-                print(f"return key pressed")
-                # Check for win only when return key is pressed
+                # Check for win when return key is pressed
                 files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
-                if len(set(files_to_play_by_channel)) == 1 and files_to_play_by_channel[0] != FILE_COUNT:
+                files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
+                player.duplicate_count = max_duplicate_count(files_to_play_by_channel)
+                if player.duplicate_count == FILE_COUNT:
                     print("winner: restarting")
                     for file in player.files:
                         file.current_frame = 0
@@ -296,4 +327,5 @@ def main():
     listener.stop()
 
 if __name__ == "__main__":
+    
     main() 
