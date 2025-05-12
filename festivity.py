@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import List, Dict
 
 MUSIC_DIR = 'music'
+VOICE_DIR = 'voices'
 CHANNELS = 4
 FILES = [
     '0.wav',
@@ -54,6 +55,8 @@ class AudioPlayer:
         print(f"index_to_play_by_channel {self.index_to_play_by_channel}")
         self.control_channel = 0
         self.winning_file = None  # Track which file has won but not finished playing
+        
+        # Load game files
         for filepath in files:
             data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
             if data.shape[1] != CHANNELS:
@@ -61,6 +64,12 @@ class AudioPlayer:
             print(f"Loaded {filepath}: {data.shape[1]} channels at {samplerate} Hz")
             self.files.append(AudioFile(data=data, samplerate=samplerate))
         
+        one_data, one_samplerate = sf.read(os.path.join(VOICE_DIR, 'one.wav'))
+        if one_samplerate != self.files[0].samplerate:
+            raise ValueError("one.wav must have same sample rate as game files")
+        self.one_file = AudioFile(data=one_data, samplerate=one_samplerate)
+        self.channel_announce_file = self.one_file
+
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
         
@@ -146,6 +155,8 @@ class AudioPlayer:
         control_channel = int(time_info.outputBufferDacTime) % CHANNELS
         if control_channel != self.control_channel:
             self.control_channel = control_channel
+            self.channel_announce_file = self.one_file
+            self.channel_announce_file.current_frame = 0
             print(f"control_channel: {control_channel}")
 
         # Check if winning file has finished playing
@@ -168,16 +179,29 @@ class AudioPlayer:
             # Adjust volumes if there's no winning file
             mixed = self._adjust_channel_volumes(mixed)
             
-        # Expand to all output channels if needed
-        if mixed.shape[1] != outdata.shape[1]:
-            if self.winning_file:
-                # If mixed, copy the first channel to all output channels
-                mixed = np.tile(mixed[:, :1], (1, outdata.shape[1]))
-            else:
-                # If not mixed, keep first CHANNELS and silence the rest
-                output = np.zeros((mixed.shape[0], outdata.shape[1]))
-                output[:, :mixed.shape[1]] = mixed
-                mixed = output
+        # Add channel announcement to the mix
+        channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
+            self.channel_announce_file.current_frame + frames]
+        self.channel_announce_file.current_frame += frames
+        # print(f"mixed.shape: {mixed.shape}")
+
+        # Pad to 6 channels
+        padded = np.zeros((mixed.shape[0], 6))
+        padded[:, :mixed.shape[1]] = mixed
+        mixed = padded
+
+        # Mix one.wav into channels 5 and 6
+        # Ensure foo_chunk is the right length
+        if len(channel_announce_chunk) < frames:
+            channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
+        elif len(channel_announce_chunk) > frames:
+            channel_announce_chunk = channel_announce_chunk[:frames]
+        mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
+        mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
+
+        # If mixed, copy the first channel to all output channels
+        if self.winning_file:
+            mixed = np.tile(mixed[:, :1], (1, outdata.shape[1]))
 
         mixed = self._normalize_volume(mixed)
         outdata[:] = mixed
