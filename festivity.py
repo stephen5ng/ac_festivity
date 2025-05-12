@@ -54,19 +54,17 @@ class AudioPlayer:
         self.max_output_channels = device_info['max_output_channels']
         print(f"\nDefault output device supports {self.max_output_channels} channels")
         
-        # Use minimum of CHANNELS and device capabilities
-        self.channels = min(CHANNELS, self.max_output_channels)
+        # Use all available output channels
+        self.channels = self.max_output_channels
         print(f"Using {self.channels} output channels")
 
     def _handle_channel_mismatch(self, chunk: np.ndarray) -> np.ndarray:
-        if chunk.shape[1] > self.channels:
-            # print(f"Chunk has {chunk.shape[1]} channels, downmixing to {self.channels}")
-            left = np.mean(chunk[:, :2], axis=1, keepdims=True)
-            right = np.mean(chunk[:, 2:], axis=1, keepdims=True)
-            chunk = np.hstack((left, right))
-        elif chunk.shape[1] < self.channels:
-            chunk = np.pad(chunk, ((0, 0), (0, self.channels - chunk.shape[1])))
-        return chunk
+        # Create a new array with all output channels, initialized to silence
+        output = np.zeros((chunk.shape[0], self.channels))
+        # Copy the available channels from the input
+        channels_to_copy = min(chunk.shape[1], self.channels)
+        output[:, :channels_to_copy] = chunk[:, :channels_to_copy]
+        return output
 
     def _select_channels(self, chunk: np.ndarray, file_index: int) -> np.ndarray:
         # Make a copy of the chunk to avoid mutating the original data
@@ -89,14 +87,14 @@ class AudioPlayer:
         return mixed
 
     def _mix_if_same_file(self, mixed: np.ndarray) -> tuple[np.ndarray, bool]:
-        """If all channels are playing the same file, mix them together.
+        """If all channels are playing the same file, mix them together and copy to all output channels.
         Returns a tuple of (mixed audio array, whether files were mixed)."""
         current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] 
                         for channel in range(CHANNELS)]
-        if len(set(current_files)) == 1:
+        if len(set(current_files)) == 1 and current_files[0] != 4:  # Don't mix if all channels are silent (file 4)
             # Mix all channels together
-            channel_mix = np.mean(mixed, axis=1, keepdims=True)
-            # Apply the mix to all channels
+            channel_mix = np.mean(mixed[:, :CHANNELS], axis=1, keepdims=True)
+            # Apply the mix to all available output channels
             mixed = np.tile(channel_mix, (1, mixed.shape[1]))
             return mixed, True
         return mixed, False
@@ -151,9 +149,18 @@ class AudioPlayer:
         if not is_mixed:
             mixed = self._adjust_channel_volumes(mixed)
             
-        mixed = self._downmix_to_stereo_if_needed(mixed, outdata.shape[1])
-        mixed = self._normalize_volume(mixed)
+        # Expand to all output channels if needed
+        if mixed.shape[1] != outdata.shape[1]:
+            if is_mixed:
+                # If mixed, copy the first channel to all output channels
+                mixed = np.tile(mixed[:, :1], (1, outdata.shape[1]))
+            else:
+                # If not mixed, keep first CHANNELS and silence the rest
+                output = np.zeros((mixed.shape[0], outdata.shape[1]))
+                output[:, :mixed.shape[1]] = mixed
+                mixed = output
 
+        mixed = self._normalize_volume(mixed)
         outdata[:] = mixed
 
     def is_playing(self) -> bool:
