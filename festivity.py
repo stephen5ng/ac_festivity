@@ -30,6 +30,12 @@ FILES = [
     '2.wav',
     '3.wav'
 ]
+CHANNEL_ANNOUNCE_FILES = [
+    'one.wav',
+    'two.wav',
+    'three.wav',
+    'four.wav'
+]
 FILE_COUNT = len(FILES)
 CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
 @dataclass
@@ -64,11 +70,14 @@ class AudioPlayer:
             print(f"Loaded {filepath}: {data.shape[1]} channels at {samplerate} Hz")
             self.files.append(AudioFile(data=data, samplerate=samplerate))
         
-        one_data, one_samplerate = sf.read(os.path.join(VOICE_DIR, 'one.wav'))
-        if one_samplerate != self.files[0].samplerate:
-            raise ValueError("one.wav must have same sample rate as game files")
-        self.one_file = AudioFile(data=one_data, samplerate=one_samplerate)
-        self.channel_announce_file = self.one_file
+        # Load channel announcement files
+        self.channel_announce_files = []
+        for filepath in CHANNEL_ANNOUNCE_FILES:
+            data, samplerate = sf.read(os.path.join(VOICE_DIR, filepath))
+            if samplerate != self.files[0].samplerate:
+                raise ValueError(f"{filepath} must have same sample rate as game files")
+            self.channel_announce_files.append(AudioFile(data=data, samplerate=samplerate))
+        self.channel_announce_file = self.channel_announce_files[0]  # Start with "one.wav"
 
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
@@ -155,7 +164,7 @@ class AudioPlayer:
         control_channel = int(time_info.outputBufferDacTime) % CHANNELS
         if control_channel != self.control_channel:
             self.control_channel = control_channel
-            self.channel_announce_file = self.one_file
+            self.channel_announce_file = self.channel_announce_files[control_channel]
             self.channel_announce_file.current_frame = 0
             print(f"control_channel: {control_channel}")
 
