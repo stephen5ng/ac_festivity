@@ -16,7 +16,7 @@ FILES = [
     '3.wav',
     '4.wav'
 ]
-CHANNEL_VOLUME = [1, 1, 1, 0.5]
+CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -75,7 +75,49 @@ class AudioPlayer:
                 selected[:, channel] = chunk[:, channel]
         return selected
 
-    def callback(self, outdata, frames, time_info, status):
+    def _adjust_channel_volumes(self, mixed: np.ndarray) -> np.ndarray:
+        """Adjust the volume of each channel according to CHANNEL_VOLUME.
+        Uses logarithmic scaling to account for human perception of sound."""
+        for channel in range(CHANNELS):
+            # Convert percentage to 0-1 range and apply logarithmic scaling
+            volume_db = 20 * np.log10(CHANNEL_VOLUME[channel])
+            # Convert back to linear scale for actual multiplication
+            volume_linear = 10 ** (volume_db / 20)
+            mixed[:, channel] *= volume_linear
+        return mixed
+
+    def _mix_if_same_file(self, mixed: np.ndarray) -> np.ndarray:
+        """If all channels are playing the same file, mix them together.
+        Returns the mixed audio array."""
+        current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] 
+                        for channel in range(CHANNELS)]
+        if len(set(current_files)) == 1:
+            self.matched_files.append(current_files[0])
+            # Mix all channels together
+            channel_mix = np.mean(mixed, axis=1, keepdims=True)
+            # Apply the mix to all channels
+            mixed = np.tile(channel_mix, (1, mixed.shape[1]))
+        return mixed
+
+    def _downmix_to_stereo_if_needed(self, mixed: np.ndarray, output_channels: int) -> np.ndarray:
+        """Downmix to stereo if the output device only supports 2 channels.
+        Returns the downmixed audio array."""
+        if output_channels == 2:
+            left = np.mean(mixed[:, :2], axis=1, keepdims=True)
+            right = np.mean(mixed[:, 2:], axis=1, keepdims=True)
+            mixed = np.hstack((left, right))
+        return mixed
+
+    def _normalize_volume(self, mixed: np.ndarray) -> np.ndarray:
+        """Normalize the volume if it exceeds 1.0 to prevent clipping.
+        Returns the normalized audio array."""
+        if np.max(np.abs(mixed)) > 1.0:
+            mixed = mixed / np.max(np.abs(mixed))
+        return mixed
+
+    def _process_chunks(self, frames: int) -> List[np.ndarray]:
+        """Process audio chunks for all files, handling looping and channel selection.
+        Returns a list of processed audio chunks."""
         chunks = []
         for file_index, file in enumerate(self.files):
             remaining_frames = len(file.data) - file.current_frame
@@ -88,36 +130,19 @@ class AudioPlayer:
             
             chunk = self._select_channels(chunk, file_index)
             chunks.append(chunk)
+        return chunks
+
+    def callback(self, outdata, frames, time_info, status):
+        # Process all chunks
+        chunks = self._process_chunks(frames)
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
-        # Apply volume adjustments to each channel
-        # Convert percentage to logarithmic scale for human perception
-        for channel in range(CHANNELS):
-            # Convert percentage to 0-1 range and apply logarithmic scaling
-            volume_db = 20 * np.log10(CHANNEL_VOLUME[channel])
-            # Convert back to linear scale for actual multiplication
-            volume_linear = 10 ** (volume_db / 20)
-            mixed[:, channel] *= volume_linear
-        
-        # Check if all channels are playing the same file
-        current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] for channel in range(CHANNELS)]
-        if len(set(current_files)) == 1:
-            self.matched_files.append(current_files[0])
-            # Mix all channels together
-            channel_mix = np.mean(mixed, axis=1, keepdims=True)
-            # Apply the mix to all channels
-            mixed = np.tile(channel_mix, (1, mixed.shape[1]))
-        
-        # Then downmix to stereo if needed
-        if outdata.shape[1] == 2:
-            left = np.mean(mixed[:, :2], axis=1, keepdims=True)
-            right = np.mean(mixed[:, 2:], axis=1, keepdims=True)
-            mixed = np.hstack((left, right))
-        
-        if np.max(np.abs(mixed)) > 1.0:
-            mixed = mixed / np.max(np.abs(mixed))
+        mixed = self._adjust_channel_volumes(mixed)
+        mixed = self._mix_if_same_file(mixed)
+        mixed = self._downmix_to_stereo_if_needed(mixed, outdata.shape[1])
+        mixed = self._normalize_volume(mixed)
 
         outdata[:] = mixed
 
