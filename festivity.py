@@ -16,7 +16,7 @@ FILES = [
     '3.wav',
     '4.wav'
 ]
-
+CHANNEL_VOLUME = [1, 1, 1, 0.5]
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -28,6 +28,7 @@ channel_play_orders = [
     np.random.permutation(len(FILES)+1).tolist() for _ in range(CHANNELS)
 ]
 print(f"channel_play_orders {channel_play_orders}")
+
 class AudioPlayer:
     def __init__(self, files: List[tuple[str, str]]):
         self.files = []
@@ -44,6 +45,7 @@ class AudioPlayer:
             max_channels = max(max_channels, data.shape[1])
         
         self.samplerate = self.files[0].samplerate
+        self.matched_files = []
         
         # Get default output device info
         device_info = sd.query_devices(kind='output')
@@ -89,6 +91,24 @@ class AudioPlayer:
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
+        
+        # Apply volume adjustments to each channel
+        # Convert percentage to logarithmic scale for human perception
+        for channel in range(CHANNELS):
+            # Convert percentage to 0-1 range and apply logarithmic scaling
+            volume_db = 20 * np.log10(CHANNEL_VOLUME[channel])
+            # Convert back to linear scale for actual multiplication
+            volume_linear = 10 ** (volume_db / 20)
+            mixed[:, channel] *= volume_linear
+        
+        # Check if all channels are playing the same file
+        current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] for channel in range(CHANNELS)]
+        if len(set(current_files)) == 1:
+            self.matched_files.append(current_files[0])
+            # Mix all channels together
+            channel_mix = np.mean(mixed, axis=1, keepdims=True)
+            # Apply the mix to all channels
+            mixed = np.tile(channel_mix, (1, mixed.shape[1]))
         
         # Then downmix to stereo if needed
         if outdata.shape[1] == 2:
