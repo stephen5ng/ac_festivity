@@ -209,6 +209,10 @@ def main():
     player = AudioPlayer(FILES)
     def on_press(key):
         try:
+            # Ignore all controls while winning file is playing
+            if player.winning_file is not None:
+                return
+
             channel = None
             if key == keyboard.Key.space:
                 channel = player.control_channel
