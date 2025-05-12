@@ -39,12 +39,12 @@ class AudioPlayer:
         ]
         print(f"index_to_play_by_channel {self.index_to_play_by_channel}")
         self.control_channel = 0
-        max_channels = 0
         for filepath in files:
             data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
+            if data.shape[1] != CHANNELS:
+                raise ValueError(f"File {filepath} has {data.shape[1]} channels, expected {CHANNELS}")
             print(f"Loaded {filepath}: {data.shape[1]} channels at {samplerate} Hz")
             self.files.append(AudioFile(data=data, samplerate=samplerate))
-            max_channels = max(max_channels, data.shape[1])
         
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
@@ -54,8 +54,8 @@ class AudioPlayer:
         self.max_output_channels = device_info['max_output_channels']
         print(f"\nDefault output device supports {self.max_output_channels} channels")
         
-        # Use minimum of input channels and device capabilities
-        self.channels = min(max_channels, self.max_output_channels)
+        # Use minimum of CHANNELS and device capabilities
+        self.channels = min(CHANNELS, self.max_output_channels)
         print(f"Using {self.channels} output channels")
 
     def _handle_channel_mismatch(self, chunk: np.ndarray) -> np.ndarray:
@@ -135,8 +135,7 @@ class AudioPlayer:
         return chunks
 
     def callback(self, outdata, frames, time_info, status):
-        # Print counter every second
-        control_channel = int(time_info.outputBufferDacTime) % 4
+        control_channel = int(time_info.outputBufferDacTime) % CHANNELS
         if control_channel != self.control_channel:
             self.control_channel = control_channel
             print(f"control_channel: {control_channel}")
@@ -175,7 +174,6 @@ def main():
                 channel = player.control_channel
             elif hasattr(key, 'char'):
                 if key.char == 's':
-                    # Restart all files from beginning
                     for file in player.files:
                         file.current_frame = 0
                     print("Restarted all files from beginning")
@@ -189,8 +187,13 @@ def main():
                 # Add a dummy extra file for silence.
                 player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
                                                            % (1 + len(player.files)))
+                files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(4)]
+                if len(set(files_to_play_by_channel)) == 1:
+                    print("winner: restarting")
+                    for file in player.files:
+                        file.current_frame = 0
                 print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
-                print(f"file_to_play_by_channel {[channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(4)]}")
+                print(f"files_to_play_by_channel {files_to_play_by_channel}")
         except AttributeError:
             return
 
