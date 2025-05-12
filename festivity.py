@@ -208,10 +208,6 @@ class AudioPlayer:
                 if should_loop:
                     file.current_frame = 0
                 else:
-                    # Pad with zeros if we shouldn't loop
-                    chunk = np.zeros((frames, file.data.shape[1]))
-                    chunk[:remaining_frames] = file.data[file.current_frame:]
-                    chunks.append(chunk)
                     continue
 
             chunk = file.data[file.current_frame:file.current_frame + frames]
