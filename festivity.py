@@ -101,18 +101,13 @@ class AudioPlayer:
             mixed[:, channel] *= volume_linear
         return mixed
 
-    def _mix_if_same_file(self, mixed: np.ndarray) -> tuple[np.ndarray, bool]:
-        """If all channels are playing the same file, mix them together and copy to all output channels.
-        Returns a tuple of (mixed audio array, whether files were mixed)."""
-        current_files = [channel_play_orders[channel][self.index_to_play_by_channel[channel]] 
-                        for channel in range(CHANNELS)]
-        if len(set(current_files)) == 1 and current_files[0] != FILE_COUNT:  # Don't mix if all channels are silent
-            # Mix all channels together
-            channel_mix = np.mean(mixed[:, :CHANNELS], axis=1, keepdims=True)
-            # Apply the mix to all available output channels
-            mixed = np.tile(channel_mix, (1, mixed.shape[1]))
-            return mixed, True
-        return mixed, False
+    def _mix_to_all_channels(self, mixed: np.ndarray) -> np.ndarray:
+        """Mix all channels together and copy to all output channels.
+        Returns the mixed audio array."""
+        # Mix all channels together
+        channel_mix = np.mean(mixed[:, :CHANNELS], axis=1, keepdims=True)
+        # Apply the mix to all available output channels
+        return np.tile(channel_mix, (1, mixed.shape[1]))
 
     def _downmix_to_stereo_if_needed(self, mixed: np.ndarray, output_channels: int) -> np.ndarray:
         """Downmix to stereo if the output device only supports 2 channels.
@@ -154,7 +149,7 @@ class AudioPlayer:
             print(f"control_channel: {control_channel}")
 
         # Check if winning file has finished playing
-        if self.winning_file is not None:
+        if self.winning_file:
             winning_file_index = self.winning_file
             file = self.files[winning_file_index]
             if file.current_frame + frames >= len(file.data):
@@ -166,15 +161,16 @@ class AudioPlayer:
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
-        mixed, is_mixed = self._mix_if_same_file(mixed)
-        
-        # Only adjust volumes if we're not mixing (i.e., different files on different channels)
-        if not is_mixed:
+        # Mix channels if there's a winning file
+        if self.winning_file:
+            mixed = self._mix_to_all_channels(mixed)
+        else:
+            # Adjust volumes if there's no winning file
             mixed = self._adjust_channel_volumes(mixed)
             
         # Expand to all output channels if needed
         if mixed.shape[1] != outdata.shape[1]:
-            if is_mixed:
+            if self.winning_file:
                 # If mixed, copy the first channel to all output channels
                 mixed = np.tile(mixed[:, :1], (1, outdata.shape[1]))
             else:
@@ -210,13 +206,24 @@ def main():
     def on_press(key):
         try:
             # Ignore all controls while winning file is playing
-            if player.winning_file is not None:
+            if player.winning_file:
                 return
 
             channel = None
             if key == keyboard.Key.space:
                 channel = player.control_channel
+            elif key == keyboard.Key.enter:
+                print(f"return key pressed")
+                # Check for win only when return key is pressed
+                files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
+                if len(set(files_to_play_by_channel)) == 1 and files_to_play_by_channel[0] != FILE_COUNT:
+                    print("winner: restarting")
+                    for file in player.files:
+                        file.current_frame = 0
+                    player.winning_file = files_to_play_by_channel[0]  # Mark this file as winning
+                    return
             elif hasattr(key, 'char'):
+                print(f"key.char: {key.char}")
                 if key.char == 's':
                     for file in player.files:
                         file.current_frame = 0
@@ -232,14 +239,8 @@ def main():
                 # Add a dummy extra file for silence.
                 player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
                                                            % len(channel_play_orders[channel]))
-                files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
-                if len(set(files_to_play_by_channel)) == 1 and files_to_play_by_channel[0] != FILE_COUNT:
-                    print("winner: restarting")
-                    for file in player.files:
-                        file.current_frame = 0
-                    player.winning_file = files_to_play_by_channel[0]  # Mark this file as winning
                 print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
-                print(f"files_to_play_by_channel {files_to_play_by_channel}")
+                print(f"files_to_play_by_channel {[channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]}")
         except AttributeError:
             return
 
