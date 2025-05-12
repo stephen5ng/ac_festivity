@@ -18,10 +18,17 @@ import sounddevice as sd
 import soundfile as sf
 import os
 import numpy as np
-from pynput import keyboard
 from dataclasses import dataclass
 from typing import List, Dict
 from enum import Enum, auto
+import sys
+import threading
+import queue
+import termios
+import tty
+import select
+import curses
+import time
 
 class PlayerState(Enum):
     IDLE = auto()
@@ -215,8 +222,8 @@ class AudioPlayer:
         return chunks
 
     def _next_announcement_state(self, state: PlayerState):
-        if state != PlayerState.IDLE:
-            print(f"current state: {state}")
+        # if state != PlayerState.IDLE:
+        #     print(f"current state: {state}")
         if state == PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT:
             return PlayerState.IDLE
         elif state == PlayerState.PLAYING_MATCH_ANNOUNCEMENT:
@@ -238,19 +245,19 @@ class AudioPlayer:
                 self.channel_announce_file = self.channel_announce_files[control_channel]
                 self.channel_announce_file.current_frame = 0
                 self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
-                print(f"control_channel: {control_channel}")            
+                # print(f"control_channel: {control_channel}")            
         elif self.state == PlayerState.PLAY_MATCH_ANNOUNCEMENT:
             self.channel_announce_file = self.channel_match_files[self.duplicate_count]
             self.state = PlayerState.PLAYING_MATCH_ANNOUNCEMENT
             self.channel_announce_file.current_frame = 0
-            print(f"PLAY_MATCH_ANNOUNCEMENT")
+            # print(f"PLAY_MATCH_ANNOUNCEMENT")
         elif self.state == PlayerState.PLAY_VICTORY_ANNOUNCEMENT:
             self.channel_announce_file = self.victory_file
             self.channel_announce_file.current_frame = 0
             self.state = PlayerState.PLAYING_VICTORY_ANNOUNCEMENT
-            print(f"PLAY_VICTORY_ANNOUNCEMENT")
+            # print(f"PLAY_VICTORY_ANNOUNCEMENT")
         elif self.state == PlayerState.PLAY_VICTORY_FILE:
-            print(f"PLAY_VICTORY_FILE")
+            # print(f"PLAY_VICTORY_FILE")
             self.state = PlayerState.PLAYING_VICTORY_FILE
             for f in self.files:
                 f.current_frame = 0
@@ -277,7 +284,7 @@ class AudioPlayer:
         # Check if victory file has finished playing
         if self.is_victory_state:
             remaining_frames = len(self.files[self.winning_file].data) - self.files[self.winning_file].current_frame
-            print(f"victory file {self.winning_file} remaining frames {remaining_frames} chunk size {frames}")
+            # print(f"victory file {self.winning_file} remaining frames {remaining_frames} chunk size {frames}")
             if remaining_frames <= frames:
                 self.state = self._next_announcement_state(self.state)
         elif self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
@@ -308,10 +315,70 @@ class AudioPlayer:
             self.index_to_play_by_channel = [
                 channel_play_orders[channel].index(FILE_COUNT) for channel in range(CHANNELS)
             ]
-        print(f"Removed file {winning_file} from play orders")
-        print(f"channel_play_orders: {channel_play_orders}")
-        print(f"Updated channel_play_orders: {channel_play_orders}")
-        print(f"Updated index_to_play_by_channel: {self.index_to_play_by_channel}")
+        # print(f"Removed file {winning_file} from play orders")
+        # print(f"channel_play_orders: {channel_play_orders}")
+        # print(f"Updated channel_play_orders: {channel_play_orders}")
+        # print(f"Updated index_to_play_by_channel: {self.index_to_play_by_channel}")
+
+class TerminalUI:
+    def __init__(self):
+        self.stdscr = curses.initscr()
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_GREEN, -1)  # For status messages
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)  # For channel info
+        curses.init_pair(3, curses.COLOR_RED, -1)    # For warnings/errors
+        curses.init_pair(4, curses.COLOR_CYAN, -1)   # For victory states
+        
+        curses.noecho()
+        curses.cbreak()
+        self.stdscr.keypad(True)
+        self.stdscr.clear()
+        self.stdscr.refresh()
+        
+        # Create windows
+        height, width = self.stdscr.getmaxyx()
+        self.status_win = curses.newwin(3, width, 0, 0)
+        self.channel_win = curses.newwin(CHANNELS + 2, width, 3, 0)
+        self.info_win = curses.newwin(5, width, CHANNELS + 5, 0)
+        
+        # Enable scrolling for info window
+        self.info_win.scrollok(True)
+        self.info_win.idlok(True)
+        
+    def cleanup(self):
+        curses.nocbreak()
+        self.stdscr.keypad(False)
+        curses.echo()
+        curses.endwin()
+        
+    def update_status(self, message, color_pair=1):
+        self.status_win.clear()
+        self.status_win.addstr(1, 1, message, curses.color_pair(color_pair))
+        self.status_win.refresh()
+        
+    def update_channels(self, player):
+        self.channel_win.clear()
+        self.channel_win.addstr(0, 1, "Channel Status:", curses.A_BOLD)
+        
+        for channel in range(CHANNELS):
+            current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
+            status = "Playing" if current_file != FILE_COUNT else "Silent"
+            file_name = FILES[current_file] if current_file != FILE_COUNT else "---"
+            color = curses.color_pair(2)
+            if channel == player.control_channel:
+                color |= curses.A_BOLD
+            self.channel_win.addstr(channel + 1, 1, 
+                f"Channel {channel + 1}: {status} - {file_name}", color)
+        self.channel_win.refresh()
+        
+    def add_info(self, message, color_pair=1):
+        self.info_win.addstr(f"{message}\n", curses.color_pair(color_pair))
+        self.info_win.refresh()
+        
+    def clear_info(self):
+        self.info_win.clear()
+        self.info_win.refresh()
 
 def list_audio_devices():
     print("\nAvailable audio devices:")
@@ -322,75 +389,135 @@ def max_duplicate_count(nums):
     duplicate_counts = [count for count in counts.values() if count > 1]
     return max(duplicate_counts) if duplicate_counts else 0
     
+def get_single_key():
+    """Read a single keypress from stdin without requiring Enter."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        # Use select to check if there's input available
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if rlist:
+            ch = sys.stdin.read(1)
+        else:
+            ch = None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
 def main():
-    list_audio_devices()
-    
-    player = AudioPlayer(FILES)
-    def on_press(key):
-        try:
-            # Ignore all controls while winning file is playing
-            if player.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]:
-                return
+    ui = TerminalUI()
+    try:
+        list_audio_devices()
+        ui.add_info("Available audio devices listed above", 1)
+        
+        player = AudioPlayer(FILES)
+        input_queue = queue.Queue()
+        
+        def input_thread():
+            """Thread to read keyboard input and put it in the queue."""
+            while True:
+                try:
+                    key = get_single_key()
+                    if key is None:
+                        continue
+                    if key == '\x0d' or key == '\n':  # Enter key
+                        input_queue.put('enter')
+                    elif key == ' ':
+                        input_queue.put('space')
+                    elif key == 's':
+                        input_queue.put('s')
+                    elif key.isdigit():
+                        input_queue.put(key)
+                    elif key == '\x03':  # Ctrl+C
+                        raise KeyboardInterrupt
+                except KeyboardInterrupt:
+                    break
 
-            channel = None
-            if key == keyboard.Key.space:
-                channel = player.control_channel
-            elif key == keyboard.Key.enter:
-                # Check for win when return key is pressed
-                print("checking for win")
-                files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
-                files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
-                max_dupe_count = max_duplicate_count(files_to_play_by_channel)
+        # Start input thread
+        thread = threading.Thread(target=input_thread, daemon=True)
+        thread.start()
 
-                if max_dupe_count == FILE_COUNT:
-                    print("found win")
-                    player.state = PlayerState.PLAY_VICTORY_ANNOUNCEMENT
-                    player.winning_file = files_to_play_by_channel[0]                  
-                else:
-                    print("no win")
-                    player.duplicate_count = max_duplicate_count(files_to_play_by_channel)
-                    player.state = PlayerState.PLAY_MATCH_ANNOUNCEMENT
-
-            elif hasattr(key, 'char'):
-                print(f"key.char: {key.char}")
-                if key.char == 's':
-                    for file in player.files:
-                        file.current_frame = 0
-                    print("Restarted all files from beginning")
-                    return
-                elif key.char.isdigit():
-                    channel = int(key.char) - 1
-                    if channel < 0 or channel >= CHANNELS:
-                        return
+        # Start audio playback
+        with sd.OutputStream(
+            samplerate=player.samplerate,
+            channels=player.channels,
+            dtype='float32',
+            callback=player.callback
+        ):
+            ui.update_status("Playing audio... Press Ctrl+C to exit", 1)
+            last_state = None
             
-            if channel is not None:
-                print(f"channel_play_orders {channel_play_orders}")
-                # Add a dummy extra file for silence.
-                player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
-                                                           % len(channel_play_orders[channel]))
-                print(f"index_to_play_by_channel {player.index_to_play_by_channel}")
-                print(f"files_to_play_by_channel {[channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]}")
-        except AttributeError:
-            return
+            while True:
+                try:
+                    # Update UI if state changed
+                    if player.state != last_state:
+                        if player.is_victory_state:
+                            ui.update_status(f"Playing victory file {player.winning_file}", 4)
+                        elif player.state == PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT:
+                            ui.update_status(f"Playing channel {player.control_channel + 1} announcement", 2)
+                        elif player.state == PlayerState.PLAYING_MATCH_ANNOUNCEMENT:
+                            ui.update_status(f"Playing match announcement for {player.duplicate_count} matches", 2)
+                        elif player.state == PlayerState.PLAYING_VICTORY_ANNOUNCEMENT:
+                            ui.update_status("Playing victory announcement!", 4)
+                        else:
+                            ui.update_status("Playing audio... Press Ctrl+C to exit", 1)
+                        last_state = player.state
+                    
+                    # Update channel display
+                    ui.update_channels(player)
+                    
+                    # Check for input with a timeout
+                    try:
+                        key = input_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
 
-    # Start keyboard listener
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
+                    # Ignore all controls while winning file is playing
+                    if player.is_victory_state:
+                        continue
 
-    # Start audio playback
-    with sd.OutputStream(
-        samplerate=player.samplerate,
-        channels=player.channels,
-        dtype='float32',
-        callback=player.callback
-    ):
-        print("\nPlaying audio...")
-        while True:
-            sd.sleep(100)
+                    channel = None
+                    if key == 'space':
+                        channel = player.control_channel
+                        ui.add_info(f"Space pressed - controlling channel {channel + 1}", 2)
+                    elif key == 'enter':
+                        ui.add_info("Checking for win...", 1)
+                        files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
+                        files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
+                        max_dupe_count = max_duplicate_count(files_to_play_by_channel)
 
-    print("Done!")
-    listener.stop()
+                        if max_dupe_count == FILE_COUNT:
+                            ui.add_info("Winner found!", 4)
+                            player.state = PlayerState.PLAY_VICTORY_ANNOUNCEMENT
+                            player.winning_file = files_to_play_by_channel[0]                  
+                        else:
+                            ui.add_info(f"No win - {max_dupe_count} matches", 2)
+                            player.duplicate_count = max_dupe_count
+                            player.state = PlayerState.PLAY_MATCH_ANNOUNCEMENT
+                    elif key == 's':
+                        for file in player.files:
+                            file.current_frame = 0
+                        ui.add_info("Restarted all files from beginning", 1)
+                        continue
+                    elif key.isdigit():
+                        channel = int(key) - 1
+                        if channel < 0 or channel >= CHANNELS:
+                            continue
+                        ui.add_info(f"Channel {channel + 1} selected", 2)
+                    
+                    if channel is not None:
+                        player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
+                                                                   % len(channel_play_orders[channel]))
+                        current_files = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
+                        ui.add_info(f"Channel {channel + 1} now playing file {current_files[channel]}", 2)
+
+                except KeyboardInterrupt:
+                    break
+
+    finally:
+        ui.cleanup()
+        print("Done!")
 
 if __name__ == "__main__":
-    
     main() 
