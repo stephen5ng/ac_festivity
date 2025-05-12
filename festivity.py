@@ -57,7 +57,7 @@ CHANNEL_MATCH_FILES = [
 ]
 VICTORY_SOUND_FILE = 'win.wav'
 FILE_COUNT = len(FILES)
-CHANNEL_VOLUME = [1, 1, 0.2, 0.1]
+CHANNEL_VOLUME = [2, 1, 0.2, 0.1]
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -128,6 +128,11 @@ class AudioPlayer:
         # Use all available output channels
         self.channels = self.max_output_channels
         print(f"Using {self.channels} output channels")
+
+    @property
+    def is_victory_state(self) -> bool:
+        """Whether the player is in a victory file state."""
+        return self.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]
 
     def _handle_channel_mismatch(self, chunk: np.ndarray) -> np.ndarray:
         # Create a new array with all output channels, initialized to silence
@@ -252,20 +257,11 @@ class AudioPlayer:
         elif self.state == PlayerState.PLAYED_VICTORY_FILE:
             self._handle_win(self.winning_file)
 
-        # Process chunks with looping disabled during victory file playback
-        should_loop = self.state not in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]
-        chunks = self._process_song_chunks(frames, should_loop)
+        chunks = self._process_song_chunks(frames, not self.is_victory_state)
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
-        # Mix channels if there's a winning file
-        if self.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]:
-            mixed = self._mix_to_all_channels(mixed)
-        else:
-            # Adjust volumes if there's no winning file
-            mixed = self._adjust_channel_volumes(mixed)
-
         # Pad to 6 channels
         padded = np.zeros((mixed.shape[0], 6))
         padded[:, :mixed.shape[1]] = mixed
@@ -279,15 +275,19 @@ class AudioPlayer:
         self.channel_announce_file.current_frame += frames
 
         # Check if victory file has finished playing
-        if self.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]:
-            if self.files[self.winning_file].current_frame >= len(self.files[self.winning_file].data):
+        if self.is_victory_state:
+            remaining_frames = len(self.files[self.winning_file].data) - self.files[self.winning_file].current_frame
+            print(f"victory file {self.winning_file} remaining frames {remaining_frames} chunk size {frames}")
+            if remaining_frames <= frames:
                 self.state = self._next_announcement_state(self.state)
         elif self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
             self.state = self._next_announcement_state(self.state)
 
-        if self.state == PlayerState.PLAYING_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
+        # Handle all mixing in one place
+        if self.is_victory_state:
             mixed = self._mix_to_all_channels(mixed)
         else:
+            mixed = self._adjust_channel_volumes(mixed)
             mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
             mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
 
@@ -329,7 +329,7 @@ def main():
     def on_press(key):
         try:
             # Ignore all controls while winning file is playing
-            if player.winning_file:
+            if player.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]:
                 return
 
             channel = None
