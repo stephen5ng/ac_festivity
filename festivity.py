@@ -181,24 +181,33 @@ class AudioPlayer:
             mixed = mixed / np.max(np.abs(mixed))
         return mixed
 
-    def _process_chunks(self, frames: int) -> List[np.ndarray]:
+    def _process_song_chunks(self, frames: int, should_loop: bool = True) -> List[np.ndarray]:
         """Process audio chunks for all files, handling looping and channel selection.
-        Returns a list of processed audio chunks."""
+        Args:
+            frames: Number of frames to process
+            should_loop: Whether files should loop when they reach the end
+        Returns:
+            List of processed audio chunks."""
         chunks = []
-        looped = False
         for file_index, file in enumerate(self.files):
             remaining_frames = len(file.data) - file.current_frame
             
             if remaining_frames < frames:
-                file.current_frame = 0
-                looped = True
+                if should_loop:
+                    file.current_frame = 0
+                else:
+                    # Pad with zeros if we shouldn't loop
+                    chunk = np.zeros((frames, file.data.shape[1]))
+                    chunk[:remaining_frames] = file.data[file.current_frame:]
+                    chunks.append(chunk)
+                    continue
 
             chunk = file.data[file.current_frame:file.current_frame + frames]
             file.current_frame += frames
             
             chunk = self._select_channels(chunk, file_index)
             chunks.append(chunk)
-        return chunks, looped
+        return chunks
 
     def _next_announcement_state(self, state: PlayerState):
         if state != PlayerState.IDLE:
@@ -237,19 +246,21 @@ class AudioPlayer:
             print(f"PLAY_VICTORY_ANNOUNCEMENT")
         elif self.state == PlayerState.PLAY_VICTORY_FILE:
             print(f"PLAY_VICTORY_FILE")
-            self.state = PlayerState.PLAYING_VICTORY_FILE            
+            self.state = PlayerState.PLAYING_VICTORY_FILE
             for f in self.files:
                 f.current_frame = 0
         elif self.state == PlayerState.PLAYED_VICTORY_FILE:
             self._handle_win(self.winning_file)
 
-        chunks, looped = self._process_chunks(frames)
+        # Process chunks with looping disabled during victory file playback
+        should_loop = self.state not in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]
+        chunks = self._process_song_chunks(frames, should_loop)
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
         # Mix channels if there's a winning file
-        if self.state == PlayerState.PLAY_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
+        if self.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]:
             mixed = self._mix_to_all_channels(mixed)
         else:
             # Adjust volumes if there's no winning file
@@ -267,13 +278,12 @@ class AudioPlayer:
 
         self.channel_announce_file.current_frame += frames
 
-        # Finished playing announcement file, next state
-        if self.state == PlayerState.PLAY_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
-            if looped:
+        # Check if victory file has finished playing
+        if self.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]:
+            if self.files[self.winning_file].current_frame >= len(self.files[self.winning_file].data):
                 self.state = self._next_announcement_state(self.state)
         elif self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
             self.state = self._next_announcement_state(self.state)
-            # print(f"next state: {self.state}")
 
         if self.state == PlayerState.PLAYING_VICTORY_FILE or self.state == PlayerState.PLAYING_VICTORY_FILE:
             mixed = self._mix_to_all_channels(mixed)
