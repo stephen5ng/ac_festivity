@@ -4,12 +4,12 @@
 
 This program creates a 4-channel audio system where each channel can independently play
 different audio files. Players can control their assigned channel using number keys (1-4)
-or the space bar (which rotates through channels automatically). When all channels
+or a GPIO button (which rotates through channels automatically). When all channels
 synchronize on the same file, that file is considered a "winner" and is removed from
 future play options after it finishes playing.
 
 Usage:
-    Run the script and use number keys 1-4 to control each channel, or space bar to
+    Run the script and use number keys 1-4 to control each channel, or GPIO button to
     control the currently active channel. Press 's' to restart all files from the beginning.
 """
 
@@ -29,6 +29,17 @@ import tty
 import select
 import curses
 import time
+import RPi.GPIO as GPIO
+
+# GPIO Configuration
+CHANNEL_BUTTON_PIN = 17  # GPIO17 (Pin 11) - for channel control
+WIN_BUTTON_PIN = 27      # GPIO27 (Pin 13) - for win check
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+# Button debounce time in seconds
+DEBOUNCE_TIME = 0.2
 
 class PlayerState(Enum):
     IDLE = auto()
@@ -509,7 +520,34 @@ def main():
             ui.add_info(f"Error initializing audio: {str(e)}", 3)
             ui.cleanup()
             raise SystemExit(1)
+            
         input_queue = queue.Queue()
+        last_channel_button_press = 0
+        last_win_button_press = 0
+        
+        def channel_button_callback(channel):
+            """Callback for channel control button press."""
+            nonlocal last_channel_button_press
+            current_time = time.time()
+            if current_time - last_channel_button_press > DEBOUNCE_TIME:
+                input_queue.put('space')
+                last_channel_button_press = current_time
+        
+        def win_button_callback(channel):
+            """Callback for win check button press."""
+            nonlocal last_win_button_press
+            current_time = time.time()
+            if current_time - last_win_button_press > DEBOUNCE_TIME:
+                input_queue.put('enter')
+                last_win_button_press = current_time
+        
+        # Set up button interrupts
+        GPIO.add_event_detect(CHANNEL_BUTTON_PIN, GPIO.FALLING, 
+                            callback=channel_button_callback, 
+                            bouncetime=int(DEBOUNCE_TIME * 1000))
+        GPIO.add_event_detect(WIN_BUTTON_PIN, GPIO.FALLING, 
+                            callback=win_button_callback, 
+                            bouncetime=int(DEBOUNCE_TIME * 1000))
         
         def input_thread():
             """Thread to read keyboard input and put it in the queue."""
@@ -520,16 +558,12 @@ def main():
                         continue
                     if key == '\x0d' or key == '\n':  # Enter key
                         input_queue.put('enter')
-                        print("Enter key pressed")
-                    elif key == ' ':
+                    elif key == ' ':  # Space key
                         input_queue.put('space')
-                        print("Space key pressed")
                     elif key == 's':
                         input_queue.put('s')
-                        print("S key pressed")
                     elif key.isdigit():
                         input_queue.put(key)
-                        print(f"Digit key pressed: {key}")
                     elif key == '\x03':  # Ctrl+C
                         raise KeyboardInterrupt
                 except KeyboardInterrupt:
@@ -581,7 +615,7 @@ def main():
                     channel = None
                     if key == 'space':
                         channel = player.control_channel
-                        ui.add_info(f"Space pressed - controlling channel {channel + 1}", 2)
+                        ui.add_info(f"Channel control triggered - controlling channel {channel + 1}", 2)
                     elif key == 'enter':
                         ui.add_info("Checking for win...", 1)
                         files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
@@ -617,8 +651,9 @@ def main():
                     break
 
     finally:
+        GPIO.cleanup()  # Clean up GPIO
         ui.cleanup()
-        print("Done!")
+    print("Done!")
 
 if __name__ == "__main__":
     main() 
