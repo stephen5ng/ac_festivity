@@ -123,18 +123,62 @@ class AudioPlayer:
         if victory_samplerate != self.files[0].samplerate:
             raise ValueError(f"{VICTORY_SOUND_FILE} must have same sample rate as game files")
         self.victory_file = AudioFile(data=victory_data, samplerate=victory_samplerate)
-
+        
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
         
-        # Get default output device info
-        device_info = sd.query_devices(kind='output')
-        self.max_output_channels = device_info['max_output_channels']
-        print(f"\nDefault output device supports {self.max_output_channels} channels")
+        # Get default output device info with fallback for Raspberry Pi
+        try:
+            # List all devices
+            devices = sd.query_devices()
+            print("\nAvailable audio devices:")
+            for i, dev in enumerate(devices):
+                print(f"{i}: {dev['name']} (in={dev['max_input_channels']}, out={dev['max_output_channels']})")
+            
+            # Try to find USB audio device
+            usb_device = None
+            for i, dev in enumerate(devices):
+                if 'USB Audio' in dev['name']:
+                    usb_device = i
+                    break
+            
+            if usb_device is None:
+                print("\nUSB Audio device not found, using default device")
+                device_id = None
+            else:
+                print(f"\nUsing USB Audio device {usb_device}")
+                device_id = usb_device
+            
+            # Test the device with a simple tone
+            print("\nTesting audio device...")
+            duration = 0.5  # seconds
+            t = np.linspace(0, duration, int(self.samplerate * duration), False)
+            tone = 0.5 * np.sin(2 * np.pi * 440 * t)
+            stereo = np.column_stack((tone, tone))
+            sd.play(stereo, self.samplerate, device=device_id)
+            sd.wait()
+            print("Audio device test successful!")
+            
+            # Set as default device
+            sd.default.device = device_id
+            device_info = sd.query_devices(device_id if device_id is not None else sd.default.device[1])
+            self.max_output_channels = device_info['max_output_channels']
+            print(f"Device supports {self.max_output_channels} output channels")
+            
+        except Exception as e:
+            print(f"\nError initializing audio: {str(e)}")
+            print("\nPlease check your audio configuration:")
+            print("1. Run 'aplay -l' to list audio devices")
+            print("2. Make sure your audio output is enabled in raspi-config")
+            print("3. Try setting the default device with:")
+            print("   export AUDIODEV=hw:0,0  # USB Audio device")
+            raise SystemExit(1)
         
         # Use all available output channels
         self.channels = self.max_output_channels
         print(f"Using {self.channels} output channels")
+        # Sleep to allow time to display output
+        time.sleep(2)
 
     @property
     def is_victory_state(self) -> bool:
@@ -241,46 +285,49 @@ class AudioPlayer:
                 self.channel_announce_file = self.channel_announce_files[control_channel]
                 self.channel_announce_file.current_frame = 0
                 self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
-                # print(f"control_channel: {control_channel}")            
         elif self.state == PlayerState.PLAY_MATCH_ANNOUNCEMENT:
             self.channel_announce_file = self.channel_match_files[self.duplicate_count]
             self.state = PlayerState.PLAYING_MATCH_ANNOUNCEMENT
             self.channel_announce_file.current_frame = 0
-            # print(f"PLAY_MATCH_ANNOUNCEMENT")
         elif self.state == PlayerState.PLAY_VICTORY_ANNOUNCEMENT:
             self.channel_announce_file = self.victory_file
             self.channel_announce_file.current_frame = 0
             self.state = PlayerState.PLAYING_VICTORY_ANNOUNCEMENT
-            # print(f"PLAY_VICTORY_ANNOUNCEMENT")
         elif self.state == PlayerState.PLAY_VICTORY_FILE:
-            # print(f"PLAY_VICTORY_FILE")
             self.state = PlayerState.PLAYING_VICTORY_FILE
             for f in self.files:
                 f.current_frame = 0
         elif self.state == PlayerState.PLAYED_VICTORY_FILE:
             self._handle_win(self.winning_file)
+            self.state = PlayerState.IDLE
 
         chunks = self._process_song_chunks(frames, not self.is_victory_state)
+        if not chunks:
+            outdata.fill(0)
+            return
 
         # Mix all chunks to get 4-channel sound
         mixed = np.sum(chunks, axis=0)
         
-        # Pad to 6 channels
-        padded = np.zeros((mixed.shape[0], 6))
+        # Pad to match output device channels
+        padded = np.zeros((mixed.shape[0], outdata.shape[1]))
         padded[:, :mixed.shape[1]] = mixed
         mixed = padded
 
-        channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
-            self.channel_announce_file.current_frame + frames]
-        if len(channel_announce_chunk) < frames:
-            channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
+        # Get announcement chunk
+        if self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
+            channel_announce_chunk = np.zeros((frames,))
+        else:
+            channel_announce_chunk = self.channel_announce_file.data[self.channel_announce_file.current_frame:
+                self.channel_announce_file.current_frame + frames]
+            if len(channel_announce_chunk) < frames:
+                channel_announce_chunk = np.pad(channel_announce_chunk, (0, frames - len(channel_announce_chunk)))
 
         self.channel_announce_file.current_frame += frames
 
         # Check if victory file has finished playing
         if self.is_victory_state:
             remaining_frames = len(self.files[self.winning_file].data) - self.files[self.winning_file].current_frame
-            # print(f"victory file {self.winning_file} remaining frames {remaining_frames} chunk size {frames}")
             if remaining_frames <= frames:
                 self.state = self._next_announcement_state(self.state)
         elif self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
@@ -291,12 +338,22 @@ class AudioPlayer:
             mixed = self._mix_to_all_channels(mixed)
         else:
             mixed = self._adjust_channel_volumes(mixed)
-            mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
-            mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
+            # Try announcements on channels 6 and 7 (indices 5 and 6)
+            if mixed.shape[1] > 6:
+                mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
+                mixed[:, 6] += channel_announce_chunk * 0.5  # Channel 7
+            # Fallback to channels 4-5 if 6-7 not available
+            elif mixed.shape[1] > 4:
+                mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
+                mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
+            # Fallback to channels 0-1 if no other channels available
+            else:
+                mixed[:, 0] += channel_announce_chunk * 0.5  # Channel 1
+                mixed[:, 1] += channel_announce_chunk * 0.5  # Channel 2
 
         # Copy announcement to first four channels during victory states
         if self.state in [PlayerState.PLAYING_VICTORY_ANNOUNCEMENT]:
-            for i in range(4):  # copy to first 4 channels
+            for i in range(min(4, mixed.shape[1])):  # copy to first 4 channels
                 mixed[:, i] = channel_announce_chunk
 
         mixed = self._normalize_volume(mixed)
@@ -376,6 +433,37 @@ class TerminalUI:
         self.info_win.clear()
         self.info_win.refresh()
 
+class DebugUI:
+    def __init__(self):
+        print("\n=== Debug UI Mode ===")
+        print("Controls:")
+        print("1-4: Select channel")
+        print("Space: Control current channel")
+        print("Enter: Check for win")
+        print("S: Restart all files")
+        print("Ctrl+C: Exit")
+        print("===================\n")
+        
+    def cleanup(self):
+        print("\nCleaning up...")
+        
+    def update_status(self, message, color_pair=1):
+        print(f"\nStatus: {message}")
+        
+    def update_channels(self, player):
+        print("\nChannel Status:")
+        for channel in range(CHANNELS):
+            current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
+            status = "Playing" if current_file != FILE_COUNT else "Silent"
+            file_name = FILES[current_file] if current_file != FILE_COUNT else "---"
+            print(f"Channel {channel + 1}: {status} - {file_name}")
+        
+    def add_info(self, message, color_pair=1):
+        print(f"Info: {message}")
+        
+    def clear_info(self):
+        pass
+
 def list_audio_devices():
     print("\nAvailable audio devices:")
     print(sd.query_devices())
@@ -402,12 +490,25 @@ def get_single_key():
     return ch
 
 def main():
-    ui = TerminalUI()
+    # Check if we're in a terminal
+    is_tty = sys.stdout.isatty()
+    
+    if is_tty:
+        try:
+            ui = TerminalUI()
+        except curses.error:
+            print("Warning: Could not initialize curses UI, falling back to debug mode")
+            ui = DebugUI()
+    else:
+        ui = DebugUI()
+    
     try:
-        list_audio_devices()
-        ui.add_info("Available audio devices listed above", 1)
-        
-        player = AudioPlayer(FILES)
+        try:
+            player = AudioPlayer(FILES)
+        except Exception as e:
+            ui.add_info(f"Error initializing audio: {str(e)}", 3)
+            ui.cleanup()
+            raise SystemExit(1)
         input_queue = queue.Queue()
         
         def input_thread():
@@ -419,12 +520,16 @@ def main():
                         continue
                     if key == '\x0d' or key == '\n':  # Enter key
                         input_queue.put('enter')
+                        print("Enter key pressed")
                     elif key == ' ':
                         input_queue.put('space')
+                        print("Space key pressed")
                     elif key == 's':
                         input_queue.put('s')
+                        print("S key pressed")
                     elif key.isdigit():
                         input_queue.put(key)
+                        print(f"Digit key pressed: {key}")
                     elif key == '\x03':  # Ctrl+C
                         raise KeyboardInterrupt
                 except KeyboardInterrupt:
