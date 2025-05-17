@@ -30,6 +30,7 @@ import select
 import curses
 import time
 import platform
+import traceback
 
 # GPIO Configuration - only import and use on Raspberry Pi
 IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith('aarch')
@@ -616,6 +617,7 @@ def main():
             player = AudioPlayer()
         except Exception as e:
             ui.add_info(f"Error initializing audio: {str(e)}", 3)
+            traceback.print_exc()
             ui.cleanup()
             raise SystemExit(1)
             
