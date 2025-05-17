@@ -32,6 +32,7 @@ import time
 import platform
 import traceback
 
+SECONDS_TO_ANNOUNCE_CHANNEL = 2
 # GPIO Configuration - only import and use on Raspberry Pi
 IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith('aarch')
 if IS_RASPBERRY_PI:
@@ -132,6 +133,7 @@ class AudioPlayer:
         self.done_playing_announcement = False  # Track if current announcement is done playing
         self.state = PlayerState.IDLE
         self.playing_victory_announcement = False
+        self.announcement_start_time = 0  # Track when announcement started
         
         # Load game files
         self.files = self._load_audio_files(SONG_FILES)
@@ -354,6 +356,9 @@ class AudioPlayer:
         # if state != PlayerState.IDLE:
         #     print(f"current state: {state}")
         if state == PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT:
+            if time.time() < self.announcement_start_time + SECONDS_TO_ANNOUNCE_CHANNEL:
+                return PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
+            
             return PlayerState.IDLE
         elif state == PlayerState.PLAYING_MATCH_ANNOUNCEMENT:
             return PlayerState.IDLE
@@ -367,13 +372,13 @@ class AudioPlayer:
         # print(f"current state: {state}")
 
     def callback(self, outdata, frames, time_info, status):
-        control_channel = int(time_info.outputBufferDacTime) % CHANNELS
         if self.state == PlayerState.IDLE:
-            if control_channel != self.control_channel:
-                self.control_channel = control_channel
-                self.channel_announce_file = self.channel_announce_files[control_channel]
-                self.channel_announce_file.current_frame = 0
-                self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
+            self.control_channel += 1
+            self.control_channel %= CHANNELS
+            self.channel_announce_file = self.channel_announce_files[self.control_channel]
+            self.channel_announce_file.current_frame = 0
+            self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
+            self.announcement_start_time = time.time()
         elif self.state == PlayerState.PLAY_MATCH_ANNOUNCEMENT:
             self.channel_announce_file = self.channel_match_files[self.duplicate_count]
             self.state = PlayerState.PLAYING_MATCH_ANNOUNCEMENT
