@@ -29,17 +29,35 @@ import tty
 import select
 import curses
 import time
-import RPi.GPIO as GPIO
+import platform
 
-# GPIO Configuration
-CHANNEL_BUTTON_PIN = 17  # GPIO17 (Pin 11) - for channel control
-WIN_BUTTON_PIN = 27      # GPIO27 (Pin 13) - for win check
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+# GPIO Configuration - only import and use on Raspberry Pi
+IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith('arm')
+if IS_RASPBERRY_PI:
+    try:
+        import RPi.GPIO as GPIO
+        CHANNEL_BUTTON_PIN = 22  # GPIO22 (Pin 15) - for channel control
+        WIN_BUTTON_PIN = 23      # GPIO23 (Pin 16) - for win check
+        DEBOUNCE_TIME = 0.2      # Button debounce time in seconds
+    except ImportError:
+        print("Warning: RPi.GPIO not available. Running without GPIO support.")
+        IS_RASPBERRY_PI = False
 
-# Button debounce time in seconds
-DEBOUNCE_TIME = 0.2
+def setup_gpio():
+    """Initialize GPIO pins if on Raspberry Pi."""
+    if not IS_RASPBERRY_PI:
+        return False
+        
+    try:
+        GPIO.cleanup()
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        print(f"GPIO setup successful on pins {CHANNEL_BUTTON_PIN} and {WIN_BUTTON_PIN}")
+        return True
+    except Exception as e:
+        print(f"Error setting up GPIO: {e}")
+        return False
 
 class PlayerState(Enum):
     IDLE = auto()
@@ -514,6 +532,17 @@ def main():
         ui = DebugUI()
     
     try:
+        # Initialize GPIO first if on Raspberry Pi
+        use_gpio = False
+        if IS_RASPBERRY_PI:
+            if setup_gpio():
+                use_gpio = True
+                ui.add_info("GPIO setup successful", 1)
+            else:
+                ui.add_info("Failed to initialize GPIO. Running without button support.", 3)
+        else:
+            ui.add_info("Running without GPIO support (not on Raspberry Pi)", 2)
+            
         try:
             player = AudioPlayer(FILES)
         except Exception as e:
@@ -524,30 +553,51 @@ def main():
         input_queue = queue.Queue()
         last_channel_button_press = 0
         last_win_button_press = 0
+        last_channel_state = GPIO.HIGH if IS_RASPBERRY_PI else None
+        last_win_state = GPIO.HIGH if IS_RASPBERRY_PI else None
         
-        def channel_button_callback(channel):
-            """Callback for channel control button press."""
-            nonlocal last_channel_button_press
-            current_time = time.time()
-            if current_time - last_channel_button_press > DEBOUNCE_TIME:
-                input_queue.put('space')
-                last_channel_button_press = current_time
+        def gpio_poll_thread():
+            """Thread to poll GPIO buttons on Raspberry Pi."""
+            if not IS_RASPBERRY_PI:
+                return
+                
+            nonlocal last_channel_state, last_win_state, last_channel_button_press, last_win_button_press
+            while True:
+                try:
+                    # Read current states
+                    channel_state = GPIO.input(CHANNEL_BUTTON_PIN)
+                    win_state = GPIO.input(WIN_BUTTON_PIN)
+                    current_time = time.time()
+                    
+                    # Check for channel button press (FALLING edge)
+                    if channel_state == GPIO.LOW and last_channel_state == GPIO.HIGH:
+                        if current_time - last_channel_button_press > DEBOUNCE_TIME:
+                            input_queue.put('space')
+                            last_channel_button_press = current_time
+                            ui.add_info("Channel button pressed", 2)
+                    
+                    # Check for win button press (FALLING edge)
+                    if win_state == GPIO.LOW and last_win_state == GPIO.HIGH:
+                        if current_time - last_win_button_press > DEBOUNCE_TIME:
+                            input_queue.put('enter')
+                            last_win_button_press = current_time
+                            ui.add_info("Win button pressed", 2)
+                    
+                    # Update last states
+                    last_channel_state = channel_state
+                    last_win_state = win_state
+                    
+                    # Small sleep to prevent CPU hogging
+                    time.sleep(0.1)
+                except Exception as e:
+                    ui.add_info(f"Error in GPIO poll thread: {e}", 3)
+                    break
         
-        def win_button_callback(channel):
-            """Callback for win check button press."""
-            nonlocal last_win_button_press
-            current_time = time.time()
-            if current_time - last_win_button_press > DEBOUNCE_TIME:
-                input_queue.put('enter')
-                last_win_button_press = current_time
-        
-        # Set up button interrupts
-        GPIO.add_event_detect(CHANNEL_BUTTON_PIN, GPIO.FALLING, 
-                            callback=channel_button_callback, 
-                            bouncetime=int(DEBOUNCE_TIME * 1000))
-        GPIO.add_event_detect(WIN_BUTTON_PIN, GPIO.FALLING, 
-                            callback=win_button_callback, 
-                            bouncetime=int(DEBOUNCE_TIME * 1000))
+        # Start GPIO poll thread if on Raspberry Pi and GPIO is available
+        if use_gpio:
+            gpio_thread = threading.Thread(target=gpio_poll_thread, daemon=True)
+            gpio_thread.start()
+            ui.add_info("GPIO polling started", 1)
         
         def input_thread():
             """Thread to read keyboard input and put it in the queue."""
@@ -651,7 +701,11 @@ def main():
                     break
 
     finally:
-        GPIO.cleanup()  # Clean up GPIO
+        if IS_RASPBERRY_PI and use_gpio:
+            try:
+                GPIO.cleanup()
+            except Exception as e:
+                print(f"Error cleaning up GPIO: {e}")
         ui.cleanup()
     print("Done!")
 
