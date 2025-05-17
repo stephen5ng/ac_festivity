@@ -32,7 +32,7 @@ import time
 import platform
 
 # GPIO Configuration - only import and use on Raspberry Pi
-IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith('arm')
+IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith('aarch')
 if IS_RASPBERRY_PI:
     try:
         import RPi.GPIO as GPIO
@@ -220,6 +220,7 @@ class AudioPlayer:
         loaded_files = []
         for filepath in file_list:
             data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
+            print(f"Loaded {filepath}: {data.shape} channels at {samplerate} Hz")
             if data.shape[1] != CHANNELS:
                 raise ValueError(f"File {filepath} has {data.shape[1]} channels, expected {CHANNELS}")
             print(f"Loaded {filepath}: {data.shape[1]} channels at {samplerate} Hz")
