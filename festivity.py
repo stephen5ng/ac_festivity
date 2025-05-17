@@ -36,8 +36,9 @@ IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith
 if IS_RASPBERRY_PI:
     try:
         import RPi.GPIO as GPIO
-        CHANNEL_BUTTON_PIN = 22  # GPIO22 (Pin 15) - for channel control
-        WIN_BUTTON_PIN = 23      # GPIO23 (Pin 16) - for win check
+        # Using BCM numbering (GPIO numbers)
+        CHANNEL_BUTTON_PIN = 17  # GPIO17 - for channel control
+        WIN_BUTTON_PIN = 27      # GPIO27 - for win check
         DEBOUNCE_TIME = 0.2      # Button debounce time in seconds
     except ImportError:
         print("Warning: RPi.GPIO not available. Running without GPIO support.")
@@ -50,10 +51,10 @@ def setup_gpio():
         
     try:
         GPIO.cleanup()
-        GPIO.setmode(GPIO.BCM)
+        GPIO.setmode(GPIO.BCM)  # Use BCM numbering
         GPIO.setup(CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        print(f"GPIO setup successful on pins {CHANNEL_BUTTON_PIN} and {WIN_BUTTON_PIN}")
+        print(f"GPIO setup successful on GPIO{CHANNEL_BUTTON_PIN} and GPIO{WIN_BUTTON_PIN}")
         return True
     except Exception as e:
         print(f"Error setting up GPIO: {e}")
