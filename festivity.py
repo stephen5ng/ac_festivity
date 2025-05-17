@@ -74,12 +74,19 @@ class PlayerState(Enum):
 MUSIC_DIR = 'music'
 VOICE_DIR = 'voices'
 CHANNELS = 4
-FILES = [
+SONG_FILES = [
     '0.wav',
     '1.wav',
     '2.wav',
     '3.wav'
 ]
+FULL_SONG_FILES = [
+    '0.full.wav',
+    '1.full.wav',
+    '2.full.wav',
+    '3.full.wav'
+]
+
 CHANNEL_ANNOUNCE_FILES = [
     'one.wav',
     'two.wav',
@@ -93,7 +100,7 @@ CHANNEL_MATCH_FILES = [
     '3_matches.wav',
 ]
 VICTORY_SOUND_FILE = 'win.wav'
-FILE_COUNT = len(FILES)
+FILE_COUNT = len(SONG_FILES)
 CHANNEL_VOLUME = [2, 1, 0.2, 0.1]
 @dataclass
 class AudioFile:
@@ -103,13 +110,14 @@ class AudioFile:
 
 # Generate random play orders for each channel
 channel_play_orders = [
-    np.random.permutation(len(FILES)+1).tolist() for _ in range(CHANNELS)
+    np.random.permutation(len(SONG_FILES)+1).tolist() for _ in range(CHANNELS)
 ]
 print(f"channel_play_orders {channel_play_orders}")
 
 class AudioPlayer:
-    def __init__(self, files: List[tuple[str, str]]):
+    def __init__(self):
         self.files = []
+        self.full_files = []  # Store full song files
         # Initialize indices to play file 4 for each channel by finding its position in each sequence
         self.index_to_play_by_channel = [
             channel_play_orders[channel].index(FILE_COUNT)
@@ -124,29 +132,16 @@ class AudioPlayer:
         self.playing_victory_announcement = False
         
         # Load game files
-        for filepath in files:
-            data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
-            if data.shape[1] != CHANNELS:
-                raise ValueError(f"File {filepath} has {data.shape[1]} channels, expected {CHANNELS}")
-            print(f"Loaded {filepath}: {data.shape[1]} channels at {samplerate} Hz")
-            self.files.append(AudioFile(data=data, samplerate=samplerate))
+        self.files = self._load_audio_files(SONG_FILES)
+        self.full_files = self._load_audio_files(FULL_SONG_FILES)
         
         # Load channel announcement files
         self.channel_announce_files = []
-        for filepath in CHANNEL_ANNOUNCE_FILES:
-            data, samplerate = sf.read(os.path.join(VOICE_DIR, filepath))
-            if samplerate != self.files[0].samplerate:
-                raise ValueError(f"{filepath} must have same sample rate as game files")
-            self.channel_announce_files.append(AudioFile(data=data, samplerate=samplerate))
+        self.channel_announce_files = self._load_voice_files(CHANNEL_ANNOUNCE_FILES)
         self.channel_announce_file = self.channel_announce_files[0]  # Start with "one.wav"
 
         # Load channel match files
-        self.channel_match_files = []
-        for filepath in CHANNEL_MATCH_FILES:
-            data, samplerate = sf.read(os.path.join(VOICE_DIR, filepath))
-            if samplerate != self.files[0].samplerate:
-                raise ValueError(f"{filepath} must have same sample rate as game files")
-            self.channel_match_files.append(AudioFile(data=data, samplerate=samplerate))
+        self.channel_match_files = self._load_voice_files(CHANNEL_MATCH_FILES)
 
         # Load victory sound
         victory_data, victory_samplerate = sf.read(os.path.join(VOICE_DIR, VICTORY_SOUND_FILE))
@@ -210,6 +205,48 @@ class AudioPlayer:
         # Sleep to allow time to display output
         time.sleep(2)
 
+    def _load_audio_files(self, file_list: List[str]) -> List[AudioFile]:
+        """Load a list of audio files and return them as AudioFile objects.
+        
+        Args:
+            file_list: List of filenames to load
+            
+        Returns:
+            List of loaded AudioFile objects
+            
+        Raises:
+            ValueError: If any file has incorrect number of channels
+        """
+        loaded_files = []
+        for filepath in file_list:
+            data, samplerate = sf.read(os.path.join(MUSIC_DIR, filepath))
+            if data.shape[1] != CHANNELS:
+                raise ValueError(f"File {filepath} has {data.shape[1]} channels, expected {CHANNELS}")
+            print(f"Loaded {filepath}: {data.shape[1]} channels at {samplerate} Hz")
+            loaded_files.append(AudioFile(data=data, samplerate=samplerate))
+        return loaded_files
+
+    def _load_voice_files(self, file_list: List[str]) -> List[AudioFile]:
+        """Load a list of voice files from VOICE_DIR and return them as AudioFile objects.
+        
+        Args:
+            file_list: List of filenames to load from VOICE_DIR
+            
+        Returns:
+            List of loaded AudioFile objects
+            
+        Raises:
+            ValueError: If any file has wrong sample rate
+        """
+        loaded_files = []
+        for filepath in file_list:
+            data, samplerate = sf.read(os.path.join(VOICE_DIR, filepath))
+            if samplerate != self.files[0].samplerate:
+                raise ValueError(f"{filepath} must have same sample rate as game files")
+            print(f"Loaded voice {filepath}: {data.shape} channels at {samplerate} Hz")
+            loaded_files.append(AudioFile(data=data, samplerate=samplerate))
+        return loaded_files
+
     @property
     def is_victory_state(self) -> bool:
         """Whether the player is in a victory file state."""
@@ -269,26 +306,45 @@ class AudioPlayer:
 
     def _process_song_chunks(self, frames: int, should_loop: bool = True) -> List[np.ndarray]:
         """Process audio chunks for all files, handling looping and channel selection.
+        
+        During normal play, uses fragment files. During victory, uses full song for winning file.
+        
         Args:
             frames: Number of frames to process
             should_loop: Whether files should loop when they reach the end
-        Returns:
-            List of processed audio chunks."""
-        chunks = []
-        for file_index, file in enumerate(self.files):
-            remaining_frames = len(file.data) - file.current_frame
             
+        Returns:
+            List of processed audio chunks, one per file
+        """
+        chunks = []
+        
+        # Get the appropriate file list for each index
+        files_to_use = self.full_files if self.is_victory_state else self.files
+        
+        for file_index in range(len(self.files)):
+            # Skip non-winning files during victory
+            if self.is_victory_state and file_index != self.winning_file:
+                continue
+                
+            # Get the appropriate file (full or fragment)
+            file = files_to_use[file_index]
+            
+            # Handle file end
+            remaining_frames = len(file.data) - file.current_frame
             if remaining_frames < frames:
                 if should_loop:
                     file.current_frame = 0
                 else:
                     continue
 
+            # Get chunk and update position
             chunk = file.data[file.current_frame:file.current_frame + frames]
             file.current_frame += frames
             
+            # Select channels for this file
             chunk = self._select_channels(chunk, file_index)
             chunks.append(chunk)
+            
         return chunks
 
     def _next_announcement_state(self, state: PlayerState):
@@ -325,8 +381,7 @@ class AudioPlayer:
             self.state = PlayerState.PLAYING_VICTORY_ANNOUNCEMENT
         elif self.state == PlayerState.PLAY_VICTORY_FILE:
             self.state = PlayerState.PLAYING_VICTORY_FILE
-            for f in self.files:
-                f.current_frame = 0
+            self.full_files[self.winning_file].current_frame = 0
         elif self.state == PlayerState.PLAYED_VICTORY_FILE:
             self._handle_win(self.winning_file)
             self.state = PlayerState.IDLE
@@ -357,7 +412,8 @@ class AudioPlayer:
 
         # Check if victory file has finished playing
         if self.is_victory_state:
-            remaining_frames = len(self.files[self.winning_file].data) - self.files[self.winning_file].current_frame
+            remaining_frames = len(self.full_files[self.winning_file].data) - self.full_files[self.winning_file].current_frame
+            
             if remaining_frames <= frames:
                 self.state = self._next_announcement_state(self.state)
         elif self.channel_announce_file.current_frame >= len(self.channel_announce_file.data):
@@ -447,12 +503,22 @@ class TerminalUI:
         for channel in range(CHANNELS):
             current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
             status = "Playing" if current_file != FILE_COUNT else "Silent"
-            file_name = FILES[current_file] if current_file != FILE_COUNT else "---"
+            file_name = SONG_FILES[current_file] if current_file != FILE_COUNT else "---"
             color = curses.color_pair(2)
             if channel == player.control_channel:
                 color |= curses.A_BOLD
             self.channel_win.addstr(channel + 1, 1, 
                 f"Channel {channel + 1}: {status} - {file_name}", color)
+                # f"Channel {channel + 1}: {status} - {file_name}", color)
+                
+        # Show remaining frames during victory playback
+        if player.is_victory_state:
+            remaining_frames = len(player.full_files[player.winning_file].data) - player.full_files[player.winning_file].current_frame
+            remaining_seconds = remaining_frames / player.samplerate
+            self.channel_win.addstr(CHANNELS + 1, 1, 
+                f"Remaining: {remaining_seconds:.1f}s ({remaining_frames} frames)", 
+                curses.color_pair(4))
+                
         self.channel_win.refresh()
         
     def add_info(self, message, color_pair=1):
@@ -485,8 +551,14 @@ class DebugUI:
         for channel in range(CHANNELS):
             current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
             status = "Playing" if current_file != FILE_COUNT else "Silent"
-            file_name = FILES[current_file] if current_file != FILE_COUNT else "---"
+            file_name = SONG_FILES[current_file] if current_file != FILE_COUNT else "---"
             print(f"Channel {channel + 1}: {status} - {file_name}")
+            
+        # Show remaining frames during victory playback
+        if player.is_victory_state:
+            remaining_frames = len(player.full_files[player.winning_file].data) - player.full_files[player.winning_file].current_frame
+            remaining_seconds = remaining_frames / player.samplerate
+            print(f"\nRemaining: {remaining_seconds:.1f}s ({remaining_frames} frames)")
         
     def add_info(self, message, color_pair=1):
         print(f"Info: {message}")
@@ -545,7 +617,7 @@ def main():
             ui.add_info("Running without GPIO support (not on Raspberry Pi)", 2)
             
         try:
-            player = AudioPlayer(FILES)
+            player = AudioPlayer()
         except Exception as e:
             ui.add_info(f"Error initializing audio: {str(e)}", 3)
             ui.cleanup()
