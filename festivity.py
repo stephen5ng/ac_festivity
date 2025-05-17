@@ -75,16 +75,16 @@ MUSIC_DIR = 'music'
 VOICE_DIR = 'voices'
 CHANNELS = 4
 SONG_FILES = [
-    '0.wav',
     '1.wav',
     '2.wav',
-    '3.wav'
+    '3.wav',
+    '4.wav'
 ]
 FULL_SONG_FILES = [
-    '0.full.wav',
     '1.full.wav',
     '2.full.wav',
-    '3.full.wav'
+    '3.full.wav',
+    '4.full.wav'
 ]
 
 CHANNEL_ANNOUNCE_FILES = [
@@ -102,6 +102,7 @@ CHANNEL_MATCH_FILES = [
 VICTORY_SOUND_FILE = 'win.wav'
 FILE_COUNT = len(SONG_FILES)
 CHANNEL_VOLUME = [2, 1, 0.2, 0.1]
+CHANNEL_VOLUME = [1, 1, 1, 1]
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -425,18 +426,12 @@ class AudioPlayer:
             mixed = self._mix_to_all_channels(mixed)
         else:
             mixed = self._adjust_channel_volumes(mixed)
-            # Try announcements on channels 6 and 7 (indices 5 and 6)
-            if mixed.shape[1] > 6:
-                mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
-                mixed[:, 6] += channel_announce_chunk * 0.5  # Channel 7
-            # Fallback to channels 4-5 if 6-7 not available
-            elif mixed.shape[1] > 4:
+            # Play announcements on channel 5 (index 4)
+            if mixed.shape[1] > 4:
                 mixed[:, 4] += channel_announce_chunk * 0.5  # Channel 5
-                mixed[:, 5] += channel_announce_chunk * 0.5  # Channel 6
-            # Fallback to channels 0-1 if no other channels available
+            # Fallback to channel 1 if 5 not available
             else:
                 mixed[:, 0] += channel_announce_chunk * 0.5  # Channel 1
-                mixed[:, 1] += channel_announce_chunk * 0.5  # Channel 2
 
         # Copy announcement to first four channels during victory states
         if self.state in [PlayerState.PLAYING_VICTORY_ANNOUNCEMENT]:
