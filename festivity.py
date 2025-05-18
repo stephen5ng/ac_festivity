@@ -102,9 +102,10 @@ CHANNEL_MATCH_FILES = [
     '3_matches.wav',
 ]
 VICTORY_SOUND_FILE = 'win.wav'
+DING_SOUND_FILE = 'ding.wav'
 FILE_COUNT = len(SONG_FILES)
 CHANNEL_VOLUME = [2, 1, 0.2, 0.1]
-CHANNEL_VOLUME = [1, 1, 1, 1]
+CHANNEL_VOLUME = [1, 1, 1, 0.2]
 @dataclass
 class AudioFile:
     data: np.ndarray
