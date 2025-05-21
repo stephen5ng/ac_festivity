@@ -309,14 +309,13 @@ class AudioPlayer:
             mixed = mixed / np.max(np.abs(mixed))
         return mixed
 
-    def _process_song_chunks(self, frames: int, should_loop: bool = True) -> List[np.ndarray]:
+    def _process_song_chunks(self, frames: int) -> List[np.ndarray]:
         """Process audio chunks for all files, handling looping and channel selection.
         
         During normal play, uses fragment files. During victory, uses full song for winning file.
         
         Args:
             frames: Number of frames to process
-            should_loop: Whether files should loop when they reach the end
             
         Returns:
             List of processed audio chunks, one per file
@@ -337,7 +336,7 @@ class AudioPlayer:
             # Handle file end
             remaining_frames = len(file.data) - file.current_frame
             if remaining_frames < frames:
-                if should_loop:
+                if not self.is_victory_state:
                     file.current_frame = 0
                 else:
                     continue
@@ -394,7 +393,7 @@ class AudioPlayer:
             self._handle_win(self.winning_file)
             self.state = PlayerState.IDLE
 
-        chunks = self._process_song_chunks(frames, not self.is_victory_state)
+        chunks = self._process_song_chunks(frames)
         if not chunks:
             outdata.fill(0)
             return
