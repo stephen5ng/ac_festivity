@@ -204,8 +204,7 @@ class AudioPlayer:
             print("   export AUDIODEV=hw:0,0  # USB Audio device")
             raise SystemExit(1)
         
-        # Use all available output channels
-        self.channels = self.max_output_channels
+        self.channels = max(6,self.max_output_channels)
         print(f"Using {self.channels} output channels")
         # Sleep to allow time to display output
         time.sleep(2)
