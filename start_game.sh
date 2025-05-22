@@ -7,4 +7,8 @@ fi
 cd /home/dietpi/festivity
 . env/bin/activate
 amixer -c 0 set 'Speaker' 100%
-python ./festivity.py
+
+while true; do
+    ./pre_game.py
+    ./festivity.py
+done
