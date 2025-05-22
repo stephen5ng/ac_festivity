@@ -166,18 +166,15 @@ class AudioPlayer:
                 print(f"{i}: {dev['name']} (in={dev['max_input_channels']}, out={dev['max_output_channels']})")
             
             # Try to find USB audio device
-            usb_device = None
+            device_id = None
             for i, dev in enumerate(devices):
                 if 'USB Audio' in dev['name']:
-                    usb_device = i
+                    device_id = i
+                    print(f"\nUsing USB Audio device {device_id}")
                     break
             
-            if usb_device is None:
+            if device_id is None:
                 print("\nUSB Audio device not found, using default device")
-                device_id = None
-            else:
-                print(f"\nUsing USB Audio device {usb_device}")
-                device_id = usb_device
             
             # Test the device with a simple tone
             print("\nTesting audio device...")
