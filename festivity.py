@@ -135,6 +135,7 @@ class AudioPlayer:
         self.state = PlayerState.IDLE
         self.playing_victory_announcement = False
         self.announcement_start_time = 0  # Track when announcement started
+        self.should_exit = False  # Flag to indicate when all songs are matched
         
         # Load game files
         self.files = self._load_audio_files(SONG_FILES)
@@ -445,18 +446,19 @@ class AudioPlayer:
 
     def _handle_win(self, winning_file: int) -> None:
         """Remove the winning file from all play orders and reset channels to silent track."""
-        # return
+        # Remove winning file from all play orders
         for i in range(len(channel_play_orders)):
             channel_play_orders[i] = [x for x in channel_play_orders[i] if x != winning_file]
             # Reset to silent track
             self.index_to_play_by_channel = [
                 channel_play_orders[channel].index(FILE_COUNT) for channel in range(CHANNELS)
             ]
-        
-        # print(f"Removed file {winning_file} from play orders")
-        # print(f"channel_play_orders: {channel_play_orders}")
-        # print(f"Updated channel_play_orders: {channel_play_orders}")
-        # print(f"Updated index_to_play_by_channel: {self.index_to_play_by_channel}")
+            
+        # Check if there are any songs remaining (excluding the silent track)
+        remaining_songs = [x for x in channel_play_orders[0] if x != FILE_COUNT]
+        if not remaining_songs:
+            print("\nAll songs have been matched! Game complete.")
+            self.should_exit = True
 
 class TerminalUI:
     def __init__(self):
@@ -616,6 +618,7 @@ def get_single_key():
 def main():
     # Check if we're in a terminal
     is_tty = sys.stdout.isatty()
+    
     if is_tty:
         try:
             ui = TerminalUI()
@@ -748,6 +751,11 @@ def main():
                     # Update channel display
                     ui.update_channels(player)
                     
+                    # Check if all songs have been matched - do this before input handling
+                    if player.should_exit:
+                        ui.add_info("All songs matched - exiting!", 4)
+                        break
+
                     # Handle input differently based on UI type
                     if isinstance(ui, TerminalUI):
                         try:
