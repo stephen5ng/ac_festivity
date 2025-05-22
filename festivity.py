@@ -41,6 +41,7 @@ if IS_RASPBERRY_PI:
         # Using BCM numbering (GPIO numbers)
         CHANNEL_BUTTON_PIN = 17  # GPIO17 - for channel control
         WIN_BUTTON_PIN = 27      # GPIO27 - for win check
+        
         DEBOUNCE_TIME = 0.2      # Button debounce time in seconds
     except ImportError:
         print("Warning: RPi.GPIO not available. Running without GPIO support.")
@@ -667,6 +668,12 @@ def main():
                     win_state = GPIO.input(WIN_BUTTON_PIN)
                     current_time = time.time()
                     
+                    # Check if both buttons are pressed (LOW)
+                    if channel_state == GPIO.LOW and win_state == GPIO.LOW:
+                        ui.add_info("Both buttons pressed - exiting game!", 3)
+                        input_queue.put('exit')
+                        break
+                    
                     # Check for channel button press (FALLING edge)
                     if channel_state == GPIO.LOW and last_channel_state == GPIO.HIGH:
                         if current_time - last_channel_button_press > DEBOUNCE_TIME:
@@ -768,6 +775,11 @@ def main():
                             break
                         if key is None:
                             continue
+
+                    # Check for exit command from GPIO
+                    if key == 'exit':
+                        ui.add_info("Exit command received - shutting down...", 3)
+                        break
 
                     # Ignore all controls while winning file is playing
                     if player.is_victory_state:
