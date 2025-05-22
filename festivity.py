@@ -452,6 +452,7 @@ class AudioPlayer:
             self.index_to_play_by_channel = [
                 channel_play_orders[channel].index(FILE_COUNT) for channel in range(CHANNELS)
             ]
+        
         # print(f"Removed file {winning_file} from play orders")
         # print(f"channel_play_orders: {channel_play_orders}")
         # print(f"Updated channel_play_orders: {channel_play_orders}")
@@ -564,6 +565,29 @@ class DebugUI:
     def clear_info(self):
         pass
 
+    def get_input(self):
+        """Get input from user in debug mode.
+        
+        Returns:
+            str: The processed command key, or None if invalid or interrupted
+        """
+        print("\nEnter command (1-4 for channels, space/s/enter, or Ctrl+C to exit):")
+        try:
+            cmd = input().strip().lower()
+            if cmd == 'space' or cmd == ' ':
+                return 'space'
+            elif cmd == 'enter' or cmd == '':
+                return 'enter'
+            elif cmd == 's':
+                return 's'
+            elif cmd.isdigit() and 1 <= int(cmd) <= 4:
+                return cmd
+            else:
+                print("Invalid command")
+                return None
+        except KeyboardInterrupt:
+            return 'exit'
+
 def list_audio_devices():
     print("\nAvailable audio devices:")
     print(sd.query_devices())
@@ -592,7 +616,6 @@ def get_single_key():
 def main():
     # Check if we're in a terminal
     is_tty = sys.stdout.isatty()
-    
     if is_tty:
         try:
             ui = TerminalUI()
@@ -691,9 +714,10 @@ def main():
                 except KeyboardInterrupt:
                     break
 
-        # Start input thread
-        thread = threading.Thread(target=input_thread, daemon=True)
-        thread.start()
+        # Start input thread only for TerminalUI
+        if isinstance(ui, TerminalUI):
+            thread = threading.Thread(target=input_thread, daemon=True)
+            thread.start()
 
         # Start audio playback
         with sd.OutputStream(
@@ -724,11 +748,18 @@ def main():
                     # Update channel display
                     ui.update_channels(player)
                     
-                    # Check for input with a timeout
-                    try:
-                        key = input_queue.get(timeout=0.1)
-                    except queue.Empty:
-                        continue
+                    # Handle input differently based on UI type
+                    if isinstance(ui, TerminalUI):
+                        try:
+                            key = input_queue.get(timeout=0.1)
+                        except queue.Empty:
+                            continue
+                    else:  # DebugUI
+                        key = ui.get_input()
+                        if key == 'exit':
+                            break
+                        if key is None:
+                            continue
 
                     # Ignore all controls while winning file is playing
                     if player.is_victory_state:
