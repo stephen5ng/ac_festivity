@@ -39,9 +39,9 @@ if IS_RASPBERRY_PI:
     try:
         import RPi.GPIO as GPIO
         # Using BCM numbering (GPIO numbers)
-        CHANNEL_BUTTON_PIN = 17  # GPIO17 - for channel control
-        WIN_BUTTON_PIN = 27      # GPIO27 - for win check
-        
+        NEXT_FILE_BUTTON_PIN = 17
+        WIN_BUTTON_PIN = 27
+        NEXT_CHANNEL_BUTTON_PIN = 22
         DEBOUNCE_TIME = 0.2      # Button debounce time in seconds
     except ImportError:
         print("Warning: RPi.GPIO not available. Running without GPIO support.")
@@ -55,9 +55,10 @@ def setup_gpio():
     try:
         GPIO.cleanup()
         GPIO.setmode(GPIO.BCM)  # Use BCM numbering
-        GPIO.setup(CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(NEXT_FILE_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        print(f"GPIO setup successful on GPIO{CHANNEL_BUTTON_PIN} and GPIO{WIN_BUTTON_PIN}")
+        GPIO.setup(NEXT_CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        print(f"GPIO setup successful on GPIO{NEXT_FILE_BUTTON_PIN}, GPIO{WIN_BUTTON_PIN}, and GPIO{NEXT_CHANNEL_BUTTON_PIN}")
         return True
     except Exception as e:
         print(f"Error setting up GPIO: {e}")
@@ -65,6 +66,7 @@ def setup_gpio():
 
 class PlayerState(Enum):
     IDLE = auto()
+    CHANGE_CHANNEL = auto()
     PLAYING_CHANNEL_ANNOUNCEMENT = auto()
     PLAY_MATCH_ANNOUNCEMENT = auto()
     PLAYING_MATCH_ANNOUNCEMENT = auto()
@@ -170,7 +172,7 @@ class AudioPlayer:
             # Try to find USB audio device
             device_id = None
             for i, dev in enumerate(devices):
-                if 'USB Audio' in dev['name']:
+                if 'USB Audio' in dev['name'] or 'USB Sound' in dev['name']:
                     device_id = i
                     print(f"\nUsing USB Audio device {device_id}")
                     break
@@ -371,8 +373,12 @@ class AudioPlayer:
 
     def callback(self, outdata, frames, time_info, status):
         if self.state == PlayerState.IDLE:
+            # Do nothing in IDLE state - wait for explicit channel change command
+            pass
+        elif self.state == PlayerState.CHANGE_CHANNEL:
             self.control_channel += 1
             self.control_channel %= CHANNELS
+            print(f"control_channel: {self.control_channel+1}")
             self.channel_announce_file = self.channel_announce_files[self.control_channel]
             self.channel_announce_file.current_frame = 0
             self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
@@ -577,12 +583,15 @@ class DebugUI:
         print("\nEnter command (1-4 for channels, space/s/enter, or Ctrl+C to exit):")
         try:
             cmd = input().strip().lower()
-            if cmd == 'space' or cmd == ' ':
-                return 'space'
-            elif cmd == 'enter' or cmd == '':
-                return 'enter'
+            print(f"cmd: {cmd}")
+            if cmd == 'f':
+                return 'f'
+            elif cmd == 'w':
+                return 'w'
             elif cmd == 's':
                 return 's'
+            elif cmd == 'c':
+                return 'c'
             elif cmd.isdigit() and 1 <= int(cmd) <= 4:
                 return cmd
             else:
@@ -619,7 +628,7 @@ def get_single_key():
 def main():
     # Check if we're in a terminal
     is_tty = sys.stdout.isatty()
-    
+    is_tty = False
     if is_tty:
         try:
             ui = TerminalUI()
@@ -661,36 +670,48 @@ def main():
                 return
                 
             nonlocal last_channel_state, last_win_state, last_channel_button_press, last_win_button_press
+            last_next_channel_state = GPIO.HIGH
+            last_next_channel_press = 0
+            
             while True:
                 try:
                     # Read current states
-                    channel_state = GPIO.input(CHANNEL_BUTTON_PIN)
+                    next_file_state = GPIO.input(NEXT_FILE_BUTTON_PIN)
                     win_state = GPIO.input(WIN_BUTTON_PIN)
+                    next_channel_state = GPIO.input(NEXT_CHANNEL_BUTTON_PIN)
                     current_time = time.time()
                     
-                    # Check if both buttons are pressed (LOW)
-                    if channel_state == GPIO.LOW and win_state == GPIO.LOW:
-                        ui.add_info("Both buttons pressed - exiting game!", 3)
+                    # Check if all buttons are pressed
+                    if next_file_state == GPIO.LOW and win_state == GPIO.LOW and next_channel_state == GPIO.LOW:
+                        ui.add_info("All buttons pressed - exiting game!", 3)
                         input_queue.put('exit')
                         break
                     
-                    # Check for channel button press (FALLING edge)
-                    if channel_state == GPIO.LOW and last_channel_state == GPIO.HIGH:
+                    # Check for next file button press (FALLING edge)
+                    if next_file_state == GPIO.LOW and last_channel_state == GPIO.HIGH:
                         if current_time - last_channel_button_press > DEBOUNCE_TIME:
-                            input_queue.put('space')
+                            input_queue.put('f')
                             last_channel_button_press = current_time
-                            ui.add_info("Channel button pressed", 2)
+                            ui.add_info("Next file button pressed", 2)
+                    
+                    # Check for next channel button press (FALLING edge)
+                    if next_channel_state == GPIO.LOW and last_next_channel_state == GPIO.HIGH:
+                        if current_time - last_next_channel_press > DEBOUNCE_TIME:
+                            input_queue.put('n')
+                            last_next_channel_press = current_time
+                            ui.add_info("Next channel button pressed", 2)
                     
                     # Check for win button press (FALLING edge)
                     if win_state == GPIO.LOW and last_win_state == GPIO.HIGH:
                         if current_time - last_win_button_press > DEBOUNCE_TIME:
-                            input_queue.put('enter')
+                            input_queue.put('w')
                             last_win_button_press = current_time
                             ui.add_info("Win button pressed", 2)
                     
                     # Update last states
-                    last_channel_state = channel_state
+                    last_channel_state = next_file_state
                     last_win_state = win_state
+                    last_next_channel_state = next_channel_state
                     
                     # Small sleep to prevent CPU hogging
                     time.sleep(0.1)
@@ -711,12 +732,14 @@ def main():
                     key = get_single_key()
                     if key is None:
                         continue
-                    if key == '\x0d' or key == '\n':  # Enter key
-                        input_queue.put('enter')
-                    elif key == ' ':  # Space key
-                        input_queue.put('space')
+                    if key == 'w':  # Win check key
+                        input_queue.put('w')
+                    elif key == 'c':  # Next channel key
+                        input_queue.put('c')
                     elif key == 's':
                         input_queue.put('s')
+                    elif key == 'f':  # Next channel key
+                        input_queue.put('f')
                     elif key.isdigit():
                         input_queue.put(key)
                     elif key == '\x03':  # Ctrl+C
@@ -771,6 +794,7 @@ def main():
                             continue
                     else:  # DebugUI
                         key = ui.get_input()
+                        print(f"key: {key}")
                         if key == 'exit':
                             break
                         if key is None:
@@ -786,10 +810,20 @@ def main():
                         continue
 
                     channel = None
-                    if key == 'space':
+                    # Handle channel change
+                    if key == 'c':
+                        player.state = PlayerState.CHANGE_CHANNEL
+                        ui.add_info(f"Changing to next channel", 2)
+                        continue
+
+                    # Handle file change
+                    if key == 'f':
                         channel = player.control_channel
-                        ui.add_info(f"Channel control triggered - controlling channel {channel + 1}", 2)
-                    elif key == 'enter':
+                        player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
+                                                               % len(channel_play_orders[channel]))
+                        current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
+                        ui.add_info(f"Channel {channel + 1} now playing file {current_file}", 2)
+                    elif key == 'w':
                         ui.add_info("Checking for win...", 1)
                         files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
                         files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
@@ -803,16 +837,20 @@ def main():
                             ui.add_info(f"No win - {max_dupe_count} matches", 2)
                             player.duplicate_count = max_dupe_count
                             player.state = PlayerState.PLAY_MATCH_ANNOUNCEMENT
+                    elif key.isdigit():
+                        channel = int(key) - 1
+                        if 0 <= channel < CHANNELS:
+                            player.control_channel = channel
+                            player.channel_announce_file = player.channel_announce_files[channel]
+                            player.channel_announce_file.current_frame = 0
+                            player.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
+                            player.announcement_start_time = time.time()
+                            ui.add_info(f"Switched to channel {channel + 1}", 2)
                     elif key == 's':
                         for file in player.files:
                             file.current_frame = 0
                         ui.add_info("Restarted all files from beginning", 1)
                         continue
-                    elif key.isdigit():
-                        channel = int(key) - 1
-                        if channel < 0 or channel >= CHANNELS:
-                            continue
-                        ui.add_info(f"Channel {channel + 1} selected", 2)
                     
                     if channel is not None:
                         player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
