@@ -697,7 +697,7 @@ def main():
                     # Check for next channel button press (FALLING edge)
                     if next_channel_state == GPIO.LOW and last_next_channel_state == GPIO.HIGH:
                         if current_time - last_next_channel_press > DEBOUNCE_TIME:
-                            input_queue.put('n')
+                            input_queue.put('c')
                             last_next_channel_press = current_time
                             ui.add_info("Next channel button pressed", 2)
                     
