@@ -467,139 +467,6 @@ class AudioPlayer:
             print("\nAll songs have been matched! Game complete.")
             self.should_exit = True
 
-class TerminalUI:
-    def __init__(self):
-        self.stdscr = curses.initscr()
-        curses.start_color()
-        curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_GREEN, -1)  # For status messages
-        curses.init_pair(2, curses.COLOR_YELLOW, -1)  # For channel info
-        curses.init_pair(3, curses.COLOR_RED, -1)    # For warnings/errors
-        curses.init_pair(4, curses.COLOR_CYAN, -1)   # For victory states
-        
-        curses.noecho()
-        curses.cbreak()
-        self.stdscr.keypad(True)
-        self.stdscr.clear()
-        self.stdscr.refresh()
-        
-        # Create windows
-        height, width = self.stdscr.getmaxyx()
-        self.status_win = curses.newwin(3, width, 0, 0)
-        self.channel_win = curses.newwin(CHANNELS + 2, width, 3, 0)
-        self.info_win = curses.newwin(5, width, CHANNELS + 5, 0)
-        
-        # Enable scrolling for info window
-        self.info_win.scrollok(True)
-        self.info_win.idlok(True)
-        
-    def cleanup(self):
-        curses.nocbreak()
-        self.stdscr.keypad(False)
-        curses.echo()
-        curses.endwin()
-        
-    def update_status(self, message, color_pair=1):
-        self.status_win.clear()
-        self.status_win.addstr(1, 1, message, curses.color_pair(color_pair))
-        self.status_win.refresh()
-        
-    def update_channels(self, player):
-        self.channel_win.clear()
-        self.channel_win.addstr(0, 1, "Channel Status:", curses.A_BOLD)
-        
-        for channel in range(CHANNELS):
-            current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
-            status = "Playing" if current_file != FILE_COUNT else "Silent"
-            file_name = SONG_FILES[current_file] if current_file != FILE_COUNT else "---"
-            color = curses.color_pair(2)
-            if channel == player.control_channel:
-                color |= curses.A_BOLD
-            self.channel_win.addstr(channel + 1, 1, 
-                f"Channel {channel + 1}: {status} - {file_name}", color)
-                # f"Channel {channel + 1}: {status} - {file_name}", color)
-                
-        # Show remaining frames during victory playback
-        if player.is_victory_state:
-            remaining_frames = len(player.full_files[player.winning_file].data) - player.full_files[player.winning_file].current_frame
-            remaining_seconds = remaining_frames / player.samplerate
-            self.channel_win.addstr(CHANNELS + 1, 1, 
-                f"Remaining: {remaining_seconds:.1f}s ({remaining_frames} frames)", 
-                curses.color_pair(4))
-                
-        self.channel_win.refresh()
-        
-    def add_info(self, message, color_pair=1):
-        self.info_win.addstr(f"{message}\n", curses.color_pair(color_pair))
-        self.info_win.refresh()
-        
-    def clear_info(self):
-        self.info_win.clear()
-        self.info_win.refresh()
-
-class DebugUI:
-    def __init__(self):
-        print("\n=== Debug UI Mode ===")
-        print("Controls:")
-        print("1-4: Select channel")
-        print("Space: Control current channel")
-        print("Enter: Check for win")
-        print("S: Restart all files")
-        print("Ctrl+C: Exit")
-        print("===================\n")
-        
-    def cleanup(self):
-        print("\nCleaning up...")
-        
-    def update_status(self, message, color_pair=1):
-        print(f"\nStatus: {message}")
-        
-    def update_channels(self, player):
-        print("\nChannel Status:")
-        for channel in range(CHANNELS):
-            current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
-            status = "Playing" if current_file != FILE_COUNT else "Silent"
-            file_name = SONG_FILES[current_file] if current_file != FILE_COUNT else "---"
-            print(f"Channel {channel + 1}: {status} - {file_name}")
-            
-        # Show remaining frames during victory playback
-        if player.is_victory_state:
-            remaining_frames = len(player.full_files[player.winning_file].data) - player.full_files[player.winning_file].current_frame
-            remaining_seconds = remaining_frames / player.samplerate
-            print(f"\nRemaining: {remaining_seconds:.1f}s ({remaining_frames} frames)")
-        
-    def add_info(self, message, color_pair=1):
-        print(f"Info: {message}")
-        
-    def clear_info(self):
-        pass
-
-    def get_input(self):
-        """Get input from user in debug mode.
-        
-        Returns:
-            str: The processed command key, or None if invalid or interrupted
-        """
-        print("\nEnter command (1-4 for channels, space/s/enter, or Ctrl+C to exit):")
-        try:
-            cmd = input().strip().lower()
-            print(f"cmd: {cmd}")
-            if cmd == 'f':
-                return 'f'
-            elif cmd == 'w':
-                return 'w'
-            elif cmd == 's':
-                return 's'
-            elif cmd == 'c':
-                return 'c'
-            elif cmd.isdigit() and 1 <= int(cmd) <= 4:
-                return cmd
-            else:
-                print("Invalid command")
-                return None
-        except KeyboardInterrupt:
-            return 'exit'
-
 def list_audio_devices():
     print("\nAvailable audio devices:")
     print(sd.query_devices())
@@ -626,36 +493,23 @@ def get_single_key():
     return ch
 
 def main():
-    # Check if we're in a terminal
-    is_tty = sys.stdout.isatty()
-    is_tty = False
-    if is_tty:
-        try:
-            ui = TerminalUI()
-        except curses.error:
-            print("Warning: Could not initialize curses UI, falling back to debug mode")
-            ui = DebugUI()
-    else:
-        ui = DebugUI()
-    
     try:
         # Initialize GPIO first if on Raspberry Pi
         use_gpio = False
         if IS_RASPBERRY_PI:
             if setup_gpio():
                 use_gpio = True
-                ui.add_info("GPIO setup successful", 1)
+                print("GPIO setup successful")
             else:
-                ui.add_info("Failed to initialize GPIO. Running without button support.", 3)
+                print("Failed to initialize GPIO. Running without button support.")
         else:
-            ui.add_info("Running without GPIO support (not on Raspberry Pi)", 2)
+            print("Running without GPIO support (not on Raspberry Pi)")
             
         try:
             player = AudioPlayer()
         except Exception as e:
-            ui.add_info(f"Error initializing audio: {str(e)}", 3)
+            print(f"Error initializing audio: {str(e)}")
             traceback.print_exc()
-            ui.cleanup()
             raise SystemExit(1)
             
         input_queue = queue.Queue()
@@ -683,7 +537,7 @@ def main():
                     
                     # Check if all buttons are pressed
                     if next_file_state == GPIO.LOW and win_state == GPIO.LOW and next_channel_state == GPIO.LOW:
-                        ui.add_info("All buttons pressed - exiting game!", 3)
+                        print("All buttons pressed - exiting game!")
                         input_queue.put('exit')
                         break
                     
@@ -692,21 +546,21 @@ def main():
                         if current_time - last_channel_button_press > DEBOUNCE_TIME:
                             input_queue.put('f')
                             last_channel_button_press = current_time
-                            ui.add_info("Next file button pressed", 2)
+                            print("Next file button pressed")
                     
                     # Check for next channel button press (FALLING edge)
                     if next_channel_state == GPIO.LOW and last_next_channel_state == GPIO.HIGH:
                         if current_time - last_next_channel_press > DEBOUNCE_TIME:
                             input_queue.put('c')
                             last_next_channel_press = current_time
-                            ui.add_info("Next channel button pressed", 2)
+                            print("Next channel button pressed")
                     
                     # Check for win button press (FALLING edge)
                     if win_state == GPIO.LOW and last_win_state == GPIO.HIGH:
                         if current_time - last_win_button_press > DEBOUNCE_TIME:
                             input_queue.put('w')
                             last_win_button_press = current_time
-                            ui.add_info("Win button pressed", 2)
+                            print("Win button pressed")
                     
                     # Update last states
                     last_channel_state = next_file_state
@@ -716,42 +570,15 @@ def main():
                     # Small sleep to prevent CPU hogging
                     time.sleep(0.1)
                 except Exception as e:
-                    ui.add_info(f"Error in GPIO poll thread: {e}", 3)
+                    print(f"Error in GPIO poll thread: {e}")
                     break
         
         # Start GPIO poll thread if on Raspberry Pi and GPIO is available
         if use_gpio:
             gpio_thread = threading.Thread(target=gpio_poll_thread, daemon=True)
             gpio_thread.start()
-            ui.add_info("GPIO polling started", 1)
+            print("GPIO polling started")
         
-        def input_thread():
-            """Thread to read keyboard input and put it in the queue."""
-            while True:
-                try:
-                    key = get_single_key()
-                    if key is None:
-                        continue
-                    if key == 'w':  # Win check key
-                        input_queue.put('w')
-                    elif key == 'c':  # Next channel key
-                        input_queue.put('c')
-                    elif key == 's':
-                        input_queue.put('s')
-                    elif key == 'f':  # Next channel key
-                        input_queue.put('f')
-                    elif key.isdigit():
-                        input_queue.put(key)
-                    elif key == '\x03':  # Ctrl+C
-                        raise KeyboardInterrupt
-                except KeyboardInterrupt:
-                    break
-
-        # Start input thread only for TerminalUI
-        if isinstance(ui, TerminalUI):
-            thread = threading.Thread(target=input_thread, daemon=True)
-            thread.start()
-
         # Start audio playback
         with sd.OutputStream(
             samplerate=player.samplerate,
@@ -759,104 +586,73 @@ def main():
             dtype='float32',
             callback=player.callback
         ):
-            ui.update_status("Playing audio... Press Ctrl+C to exit", 1)
-            last_state = None
+            print("\n=== Game Controls ===")
+            print("f: Next file in current channel")
+            print("c: Change to next channel")
+            print("w: Check for win")
+            print("s: Restart all files")
+            print("1-4: Select channel")
+            print("Ctrl+C: Exit")
+            print("===================\n")
             
             while True:
                 try:
-                    # Update UI if state changed
-                    if player.state != last_state:
-                        if player.is_victory_state:
-                            ui.update_status(f"Playing victory file {player.winning_file}", 4)
-                        elif player.state == PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT:
-                            ui.update_status(f"Playing channel {player.control_channel + 1} announcement", 2)
-                        elif player.state == PlayerState.PLAYING_MATCH_ANNOUNCEMENT:
-                            ui.update_status(f"Playing match announcement for {player.duplicate_count} matches", 2)
-                        elif player.state == PlayerState.PLAYING_VICTORY_ANNOUNCEMENT:
-                            ui.update_status("Playing victory announcement!", 4)
-                        else:
-                            ui.update_status("Playing audio... Press Ctrl+C to exit", 1)
-                        last_state = player.state
-                    
-                    # Update channel display
-                    ui.update_channels(player)
-                    
-                    # Check if all songs have been matched - do this before input handling
-                    if player.should_exit:
-                        ui.add_info("All songs matched - exiting!", 4)
+                    # Get input from command line
+                    cmd = input().strip().lower()
+                    print(f"cmd: {cmd}")
+
+                    # Process command
+                    if cmd == 'exit' or cmd == '\x03':  # exit or Ctrl+C
                         break
-
-                    # Handle input differently based on UI type
-                    if isinstance(ui, TerminalUI):
-                        try:
-                            key = input_queue.get(timeout=0.1)
-                        except queue.Empty:
-                            continue
-                    else:  # DebugUI
-                        key = ui.get_input()
-                        print(f"key: {key}")
-                        if key == 'exit':
-                            break
-                        if key is None:
-                            continue
-
-                    # Check for exit command from GPIO
-                    if key == 'exit':
-                        ui.add_info("Exit command received - shutting down...", 3)
-                        break
-
-                    # Ignore all controls while winning file is playing
-                    if player.is_victory_state:
+                    elif cmd not in ['f', 'w', 's', 'c'] and not (cmd.isdigit() and 1 <= int(cmd) <= 4):
+                        print("Invalid command")
                         continue
 
-                    channel = None
                     # Handle channel change
-                    if key == 'c':
+                    if cmd == 'c':
                         player.state = PlayerState.CHANGE_CHANNEL
-                        ui.add_info(f"Changing to next channel", 2)
+                        print(f"Changing to next channel")
                         continue
 
                     # Handle file change
-                    if key == 'f':
+                    if cmd == 'f':
                         channel = player.control_channel
                         player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
                                                                % len(channel_play_orders[channel]))
                         current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
-                        ui.add_info(f"Channel {channel + 1} now playing file {current_file}", 2)
-                    elif key == 'w':
-                        ui.add_info("Checking for win...", 1)
+                        print(f"Channel {channel + 1} now playing file {current_file}")
+                    elif cmd == 'w':
+                        print("Checking for win...")
                         files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
                         files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
                         max_dupe_count = max_duplicate_count(files_to_play_by_channel)
 
                         if max_dupe_count == FILE_COUNT:
-                            ui.add_info("Winner found!", 4)
+                            print("Winner found!")
                             player.state = PlayerState.PLAY_VICTORY_ANNOUNCEMENT
                             player.winning_file = files_to_play_by_channel[0]                  
                         else:
-                            ui.add_info(f"No win - {max_dupe_count} matches", 2)
+                            print(f"No win - {max_dupe_count} matches")
                             player.duplicate_count = max_dupe_count
                             player.state = PlayerState.PLAY_MATCH_ANNOUNCEMENT
-                    elif key.isdigit():
-                        channel = int(key) - 1
+                    elif cmd == 's':
+                        for file in player.files:
+                            file.current_frame = 0
+                        print("Restarted all files from beginning")
+                    elif cmd.isdigit():
+                        channel = int(cmd) - 1
                         if 0 <= channel < CHANNELS:
                             player.control_channel = channel
                             player.channel_announce_file = player.channel_announce_files[channel]
                             player.channel_announce_file.current_frame = 0
                             player.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
                             player.announcement_start_time = time.time()
-                            ui.add_info(f"Switched to channel {channel + 1}", 2)
-                    elif key == 's':
-                        for file in player.files:
-                            file.current_frame = 0
-                        ui.add_info("Restarted all files from beginning", 1)
-                        continue
-                    
-                    if channel is not None:
-                        player.index_to_play_by_channel[channel] = ((player.index_to_play_by_channel[channel] + 1) 
-                                                                   % len(channel_play_orders[channel]))
-                        current_files = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
-                        ui.add_info(f"Channel {channel + 1} now playing file {current_files[channel]}", 2)
+                            print(f"Switched to channel {channel + 1}")
+
+                    # Check if all songs have been matched
+                    if player.should_exit:
+                        print("All songs matched - exiting!")
+                        break
 
                 except KeyboardInterrupt:
                     break
@@ -867,7 +663,6 @@ def main():
                 GPIO.cleanup()
             except Exception as e:
                 print(f"Error cleaning up GPIO: {e}")
-        ui.cleanup()
     print("Done!")
 
 if __name__ == "__main__":
