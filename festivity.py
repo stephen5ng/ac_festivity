@@ -258,19 +258,10 @@ class AudioPlayer:
         """Whether the player is in a victory file state."""
         return self.state in [PlayerState.PLAY_VICTORY_FILE, PlayerState.PLAYING_VICTORY_FILE]
 
-    def _handle_channel_mismatch(self, chunk: np.ndarray) -> np.ndarray:
-        # Create a new array with all output channels, initialized to silence
-        output = np.zeros((chunk.shape[0], self.channels))
-        # Copy the available channels from the input
-        channels_to_copy = min(chunk.shape[1], self.channels)
-        output[:, :channels_to_copy] = chunk[:, :channels_to_copy]
-        return output
-
     def _select_channels(self, chunk: np.ndarray, file_index: int) -> np.ndarray:
         # Make a copy of the chunk to avoid mutating the original data
         selected = np.zeros_like(chunk)
         for channel in range(CHANNELS):
-            # print(f"channel {channel} index_to_play_by_channel {self.index_to_play_by_channel[channel]}")
             if channel_play_orders[channel][self.index_to_play_by_channel[channel]] == file_index:
                 selected[:, channel] = chunk[:, channel]
         return selected
