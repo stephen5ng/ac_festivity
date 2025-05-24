@@ -79,7 +79,9 @@ class PlayerState(Enum):
 MUSIC_DIR = 'music'
 VOICE_DIR = 'voices'
 CHANNELS = 4
+SILENT_CHANNEL = 0
 SONG_FILES = [
+    '0.wav',
     '1.wav',
     '2.wav',
     '3.wav',
@@ -107,8 +109,7 @@ CHANNEL_MATCH_FILES = [
 VICTORY_SOUND_FILE = 'win.wav'
 DING_SOUND_FILE = 'ding.wav'
 FILE_COUNT = len(SONG_FILES)
-CHANNEL_VOLUME = [2, 1, 0.2, 0.1]
-CHANNEL_VOLUME = [1, 1, 1, 0.2]
+CHANNEL_VOLUME = [1, 1, 1, 1]
 @dataclass
 class AudioFile:
     data: np.ndarray
@@ -117,7 +118,7 @@ class AudioFile:
 
 # Generate random play orders for each channel
 channel_play_orders = [
-    np.random.permutation(len(SONG_FILES)+1).tolist() for _ in range(CHANNELS)
+    np.random.permutation(len(SONG_FILES)).tolist() for _ in range(CHANNELS)
 ]
 print(f"channel_play_orders {channel_play_orders}")
 
@@ -125,9 +126,9 @@ class AudioPlayer:
     def __init__(self):
         self.files = []
         self.full_files = []  # Store full song files
-        # Initialize indices to play file 4 for each channel by finding its position in each sequence
+        # Initialize indices to play silence for each channel by finding its position in each sequence
         self.index_to_play_by_channel = [
-            channel_play_orders[channel].index(FILE_COUNT)
+            channel_play_orders[channel].index(SILENT_CHANNEL)
             for channel in range(CHANNELS)
         ]
         print(f"index_to_play_by_channel {self.index_to_play_by_channel}")
@@ -449,11 +450,11 @@ class AudioPlayer:
             channel_play_orders[i] = [x for x in channel_play_orders[i] if x != winning_file]
             # Reset to silent track
             self.index_to_play_by_channel = [
-                channel_play_orders[channel].index(FILE_COUNT) for channel in range(CHANNELS)
+                channel_play_orders[channel].index(SILENT_CHANNEL) for channel in range(CHANNELS)
             ]
             
         # Check if there are any songs remaining (excluding the silent track)
-        remaining_songs = [x for x in channel_play_orders[0] if x != FILE_COUNT]
+        remaining_songs = [x for x in channel_play_orders[SILENT_CHANNEL] if x != 0]
         if not remaining_songs:
             print("\nAll songs have been matched! Game complete.")
             self.should_exit = True
@@ -615,10 +616,10 @@ def main():
                     elif cmd == 'w':
                         print("Checking for win...")
                         files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
-                        files_to_play_by_channel = [x for x in files_to_play_by_channel if x != FILE_COUNT]
+                        files_to_play_by_channel = [x for x in files_to_play_by_channel if x != 0]
                         max_dupe_count = max_duplicate_count(files_to_play_by_channel)
 
-                        if max_dupe_count == FILE_COUNT:
+                        if max_dupe_count == CHANNELS:
                             print("Winner found!")
                             player.state = PlayerState.PLAY_VICTORY_ANNOUNCEMENT
                             player.winning_file = files_to_play_by_channel[0]                  
