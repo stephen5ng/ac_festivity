@@ -24,10 +24,6 @@ from enum import Enum, auto
 import sys
 import threading
 import queue
-import termios
-import tty
-import select
-import curses
 import time
 import platform
 import traceback
@@ -75,6 +71,8 @@ class PlayerState(Enum):
     PLAY_VICTORY_FILE = auto()
     PLAYING_VICTORY_FILE = auto()
     PLAYED_VICTORY_FILE = auto()
+    PLAY_NEXT_FILE_ANNOUNCEMENT = auto()
+    PLAYING_NEXT_FILE_ANNOUNCEMENT = auto()
 
 MUSIC_DIR = 'music'
 VOICE_DIR = 'voices'
@@ -109,6 +107,7 @@ CHANNEL_MATCH_FILES = [
 VICTORY_SOUND_FILE = 'win.wav'
 DING_SOUND_FILE = 'ding.wav'
 FILE_COUNT = len(SONG_FILES)
+NEXT_FILE_FILE = 'next_song.wav'
 CHANNEL_VOLUME = [1, 1, 1, 1]
 @dataclass
 class AudioFile:
@@ -159,6 +158,11 @@ class AudioPlayer:
             raise ValueError(f"{VICTORY_SOUND_FILE} must have same sample rate as game files")
         self.victory_file = AudioFile(data=victory_data, samplerate=victory_samplerate)
         
+        next_file_data, next_file_data_samplerate = sf.read(os.path.join(VOICE_DIR, NEXT_FILE_FILE))
+        if next_file_data_samplerate != self.files[0].samplerate:
+            raise ValueError(f"{NEXT_FILE_FILE} must have same sample rate as game files")
+        self.next_file_file = AudioFile(data=next_file_data, samplerate=next_file_data_samplerate)
+
         self.samplerate = self.files[0].samplerate
         self.matched_files = []
         
@@ -345,12 +349,9 @@ class AudioPlayer:
         return chunks
 
     def _next_announcement_state(self, state: PlayerState):
-        # if state != PlayerState.IDLE:
-        #     print(f"current state: {state}")
         if state == PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT:
             if time.time() < self.announcement_start_time + SECONDS_TO_ANNOUNCE_CHANNEL:
                 return PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
-            
             return PlayerState.IDLE
         elif state == PlayerState.PLAYING_MATCH_ANNOUNCEMENT:
             return PlayerState.IDLE
@@ -360,8 +361,9 @@ class AudioPlayer:
             return PlayerState.PLAYED_VICTORY_FILE
         elif state == PlayerState.PLAYED_VICTORY_FILE:
             return PlayerState.IDLE
+        elif state == PlayerState.PLAYING_NEXT_FILE_ANNOUNCEMENT:
+            return PlayerState.IDLE
         return PlayerState.IDLE
-        # print(f"current state: {state}")
 
     def callback(self, outdata, frames, time_info, status):
         if self.state == PlayerState.IDLE:
@@ -375,6 +377,10 @@ class AudioPlayer:
             self.channel_announce_file.current_frame = 0
             self.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
             self.announcement_start_time = time.time()
+        elif self.state == PlayerState.PLAY_NEXT_FILE_ANNOUNCEMENT:
+            self.channel_announce_file = self.next_file_file
+            self.channel_announce_file.current_frame = 0
+            self.state = PlayerState.PLAYING_NEXT_FILE_ANNOUNCEMENT
         elif self.state == PlayerState.PLAY_MATCH_ANNOUNCEMENT:
             self.channel_announce_file = self.channel_match_files[self.duplicate_count]
             self.state = PlayerState.PLAYING_MATCH_ANNOUNCEMENT
@@ -467,22 +473,6 @@ def max_duplicate_count(nums):
     counts = Counter(nums)
     duplicate_counts = [count for count in counts.values() if count > 1]
     return max(duplicate_counts) if duplicate_counts else 0
-    
-def get_single_key():
-    """Read a single keypress from stdin without requiring Enter."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(sys.stdin.fileno())
-        # Use select to check if there's input available
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-        if rlist:
-            ch = sys.stdin.read(1)
-        else:
-            ch = None
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
 
 def main():
     try:
@@ -613,6 +603,8 @@ def main():
                                                                % len(channel_play_orders[channel]))
                         current_file = channel_play_orders[channel][player.index_to_play_by_channel[channel]]
                         print(f"Channel {channel + 1} now playing file {current_file}")
+                        print("Playing next file announcement...")
+                        player.state = PlayerState.PLAY_NEXT_FILE_ANNOUNCEMENT
                     elif cmd == 'w':
                         print("Checking for win...")
                         files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
