@@ -27,6 +27,7 @@ import queue
 import time
 import platform
 import traceback
+import select
 
 SECONDS_TO_ANNOUNCE_CHANNEL = 2
 # GPIO Configuration - only import and use on Raspberry Pi
@@ -579,8 +580,26 @@ def main():
             
             while True:
                 try:
-                    # Get input from command line
-                    cmd = input().strip().lower()
+                    # Check both keyboard input and GPIO queue
+                    # Set up select to watch stdin
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)  # 0.1s timeout
+                    
+                    cmd = None
+                    
+                    # Check for keyboard input
+                    if rlist:
+                        cmd = sys.stdin.readline().strip().lower()
+                    
+                    # Check for GPIO input
+                    try:
+                        while not input_queue.empty():
+                            cmd = input_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                        
+                    if not cmd:
+                        continue
+
                     print(f"cmd: {cmd}")
 
                     # Process command
