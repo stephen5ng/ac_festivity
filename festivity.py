@@ -84,13 +84,15 @@ SONG_FILES = [
     '1.wav',
     '2.wav',
     '3.wav',
-    '4.wav'
+    '4.wav',
+    '5.wav'
 ]
 FULL_SONG_FILES = [
     '1.full.wav',
     '2.full.wav',
     '3.full.wav',
-    '4.full.wav'
+    '4.full.wav',
+    '5.full.wav'
 ]
 
 CHANNEL_ANNOUNCE_FILES = [
