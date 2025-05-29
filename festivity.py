@@ -37,8 +37,8 @@ if IS_RASPBERRY_PI:
         import RPi.GPIO as GPIO
         # Using BCM numbering (GPIO numbers)
         NEXT_FILE_BUTTON_PIN = 17
-        WIN_BUTTON_PIN = 27
         NEXT_CHANNEL_BUTTON_PIN = 22
+        WIN_BUTTON_PIN = 27
         DEBOUNCE_TIME = 0.2      # Button debounce time in seconds
     except ImportError:
         print("Warning: RPi.GPIO not available. Running without GPIO support.")
