@@ -447,7 +447,7 @@ class AudioPlayer:
 
         # Copy announcement to first four channels during victory states
         if self.state in [PlayerState.PLAYING_VICTORY_ANNOUNCEMENT]:
-            for i in range(min(4, mixed.shape[1])):  # copy to first 4 channels
+            for i in range(mixed.shape[1]):  # copy to all available channels
                 mixed[:, i] = channel_announce_chunk
 
         mixed = self._normalize_volume(mixed)
