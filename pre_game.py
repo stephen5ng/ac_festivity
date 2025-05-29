@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """A simple program that plays a dialtone on all 6 tracks of a USB audio device.
-Exits when any key is pressed or when GPIO buttons (17 or 27) are pressed.
+Exits when Enter is pressed or when GPIO buttons (17 or 27) are pressed.
 """
 
 import sounddevice as sd
@@ -10,9 +10,6 @@ import numpy as np
 import sys
 import threading
 import queue
-import termios
-import tty
-import select
 import time
 import platform
 
@@ -45,21 +42,12 @@ def setup_gpio():
         print(f"Error setting up GPIO: {e}")
         return False
 
-def get_single_key():
-    """Read a single keypress from stdin without requiring Enter."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
+def get_input():
+    """Read input from stdin."""
     try:
-        tty.setraw(sys.stdin.fileno())
-        # Use select to check if there's input available
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-        if rlist:
-            ch = sys.stdin.read(1)
-        else:
-            ch = None
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
+        return input()
+    except EOFError:
+        return None
 
 def audio_callback(outdata, frames, time_info, status):
     """Callback function for audio playback."""
@@ -154,8 +142,7 @@ def main():
         """Thread to read keyboard input."""
         while True:
             try:
-                key = get_single_key()
-                if key is not None:
+                if get_input() is not None:
                     input_queue.put('exit')
                     break
             except:
@@ -196,7 +183,7 @@ def main():
             callback=audio_callback,
             dtype='float32'
         ):
-            print("\nPlaying dialtone... Press any key to exit")
+            print("\nPlaying dialtone... Press Enter to exit")
             
             # Wait for input
             while True:
