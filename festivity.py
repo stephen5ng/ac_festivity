@@ -88,6 +88,7 @@ SONG_FILES = [
     '5.wav'
 ]
 FULL_SONG_FILES = [
+    '0.full.wav',
     '1.full.wav',
     '2.full.wav',
     '3.full.wav',
