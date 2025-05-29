@@ -12,6 +12,7 @@ import threading
 import queue
 import time
 import platform
+import select
 
 # GPIO Configuration - only import and use on Raspberry Pi
 IS_RASPBERRY_PI = platform.system() == 'Linux' and platform.machine().startswith('aarch')
@@ -39,13 +40,6 @@ def setup_gpio():
     except Exception as e:
         print(f"Error setting up GPIO: {e}")
         return False
-
-def get_input():
-    """Read input from stdin."""
-    try:
-        return input()
-    except EOFError:
-        return None
 
 def audio_callback(outdata, frames, time_info, status):
     """Callback function for audio playback."""
@@ -105,6 +99,9 @@ def main():
 
     # Create a queue for input events
     input_queue = queue.Queue()
+    
+    # Flag to signal threads to exit
+    exit_flag = threading.Event()
 
     def gpio_poll_thread():
         """Thread to poll GPIO buttons on Raspberry Pi."""
@@ -114,7 +111,7 @@ def main():
         last_states = {pin: GPIO.HIGH for pin in GPIO_PINS}
         last_button_press = 0
 
-        while True:
+        while not exit_flag.is_set():
             try:
                 current_time = time.time()
                 
@@ -135,21 +132,8 @@ def main():
                 print(f"Error in GPIO poll thread: {e}")
                 break
 
-    def input_thread():
-        """Thread to read keyboard input."""
-        while True:
-            try:
-                if get_input() is not None:
-                    input_queue.put('exit')
-                    break
-            except:
-                break
-
-    # Start the input thread
-    input_thread = threading.Thread(target=input_thread, daemon=True)
-    input_thread.start()
-
     # Start the GPIO thread if available
+    gpio_thread = None
     if use_gpio:
         gpio_thread = threading.Thread(target=gpio_poll_thread, daemon=True)
         gpio_thread.start()
@@ -182,23 +166,42 @@ def main():
         ):
             print("\nPlaying dialtone... Press Enter to exit")
             
-            # Wait for input
+            # Wait for input using select instead of input()
             while True:
                 try:
-                    # Check for input with timeout
+                    # Check both keyboard input and GPIO queue
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    
+                    if rlist:  # If keyboard input is available
+                        if sys.stdin.readline().strip():  # Read and clear the input
+                            break
+                            
+                    # Check GPIO queue
                     try:
-                        input_queue.get(timeout=0.1)
-                        break  # Exit if any input received
+                        cmd = input_queue.get_nowait()
+                        if cmd == 'exit':
+                            break
                     except queue.Empty:
-                        continue
+                        pass
+                        
                 except KeyboardInterrupt:
+                    break
+                except Exception as e:
+                    print(f"Error in main loop: {e}")
                     break
 
     except Exception as e:
         print(f"Error during playback: {e}")
     finally:
+        # Signal threads to exit
+        exit_flag.set()
+        
+        # Clean up GPIO
         if IS_RASPBERRY_PI and use_gpio:
-            GPIO.cleanup()
+            try:
+                GPIO.cleanup()
+            except Exception as e:
+                print(f"Error cleaning up GPIO: {e}")
 
     print("Done!")
 

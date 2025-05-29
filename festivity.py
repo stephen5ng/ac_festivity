@@ -50,7 +50,6 @@ def setup_gpio():
         return False
         
     try:
-        GPIO.cleanup()
         GPIO.setmode(GPIO.BCM)  # Use BCM numbering
         GPIO.setup(NEXT_FILE_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
