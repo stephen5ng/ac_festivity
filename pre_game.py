@@ -76,9 +76,11 @@ def audio_callback(outdata, frames, time_info, status):
         if current_frame >= len(audio_data):
             current_frame = 0
     
-    # Reshape to match output channels (6)
+    # Reshape to match output channels (5 active + 1 silent)
     chunk = chunk.reshape(-1, 1)  # Make it a column vector
-    chunk = np.tile(chunk, (1, 6))  # Copy to all 6 channels
+    chunk = np.tile(chunk, (1, 5))  # Copy to first 5 channels
+    # Add a silent 6th channel
+    chunk = np.pad(chunk, ((0, 0), (0, 1)), mode='constant', constant_values=0)
     
     # Copy the data to the output buffer
     outdata[:] = chunk
