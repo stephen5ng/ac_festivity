@@ -19,8 +19,7 @@ if IS_RASPBERRY_PI:
     try:
         import RPi.GPIO as GPIO
         # Using BCM numbering (GPIO numbers)
-        CHANNEL_BUTTON_PIN = 17  # GPIO17
-        WIN_BUTTON_PIN = 27      # GPIO27
+        GPIO_PINS = [17, 27, 22]  # GPIO pins to monitor
         DEBOUNCE_TIME = 0.2      # Button debounce time in seconds
     except ImportError:
         print("Warning: RPi.GPIO not available. Running without GPIO support.")
@@ -32,11 +31,10 @@ def setup_gpio():
         return False
         
     try:
-        GPIO.cleanup()
         GPIO.setmode(GPIO.BCM)  # Use BCM numbering
-        GPIO.setup(CHANNEL_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(WIN_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        print(f"GPIO setup successful on GPIO{CHANNEL_BUTTON_PIN} and GPIO{WIN_BUTTON_PIN}")
+        for pin in GPIO_PINS:
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        print(f"GPIO setup successful on pins: {', '.join(map(str, GPIO_PINS))}")
         return True
     except Exception as e:
         print(f"Error setting up GPIO: {e}")
@@ -113,27 +111,24 @@ def main():
         if not IS_RASPBERRY_PI:
             return
 
-        last_channel_state = GPIO.HIGH
-        last_win_state = GPIO.HIGH
+        last_states = {pin: GPIO.HIGH for pin in GPIO_PINS}
         last_button_press = 0
 
         while True:
             try:
-                # Read current states
-                channel_state = GPIO.input(CHANNEL_BUTTON_PIN)
-                win_state = GPIO.input(WIN_BUTTON_PIN)
                 current_time = time.time()
-
-                # Check for any button press (FALLING edge)
-                if ((channel_state == GPIO.LOW and last_channel_state == GPIO.HIGH) or
-                    (win_state == GPIO.LOW and last_win_state == GPIO.HIGH)):
-                    if current_time - last_button_press > DEBOUNCE_TIME:
-                        input_queue.put('exit')
-                        last_button_press = current_time
-
-                # Update last states
-                last_channel_state = channel_state
-                last_win_state = win_state
+                
+                # Check all pins
+                for pin in GPIO_PINS:
+                    current_state = GPIO.input(pin)
+                    
+                    # Check for button press (FALLING edge)
+                    if current_state == GPIO.LOW and last_states[pin] == GPIO.HIGH:
+                        if current_time - last_button_press > DEBOUNCE_TIME:
+                            input_queue.put('exit')
+                            last_button_press = current_time
+                    
+                    last_states[pin] = current_state
 
                 time.sleep(0.1)
             except Exception as e:
