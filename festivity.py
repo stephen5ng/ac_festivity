@@ -547,6 +547,11 @@ def main():
                             input_queue.put('w')
                             last_win_button_press = current_time
                             print("Win button pressed")
+                            # Print currently playing files for each channel
+                            files_to_play_by_channel = [channel_play_orders[c][player.index_to_play_by_channel[c]] for c in range(CHANNELS)]
+                            for channel, file_index in enumerate(files_to_play_by_channel):
+                                print(f"Channel {channel + 1} is playing: {SONG_FILES[file_index]}")
+                            print("---")
                     
                     # Update last states
                     last_channel_state = next_file_state
@@ -583,6 +588,11 @@ def main():
             
             while True:
                 try:
+                    # Check if all songs have been matched first
+                    if player.should_exit:
+                        print("All songs matched - exiting!")
+                        break
+
                     # Check both keyboard input and GPIO queue
                     # Set up select to watch stdin
                     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)  # 0.1s timeout
@@ -654,11 +664,6 @@ def main():
                             player.state = PlayerState.PLAYING_CHANNEL_ANNOUNCEMENT
                             player.announcement_start_time = time.time()
                             print(f"Switched to channel {channel + 1}")
-
-                    # Check if all songs have been matched
-                    if player.should_exit:
-                        print("All songs matched - exiting!")
-                        break
 
                 except KeyboardInterrupt:
                     break
